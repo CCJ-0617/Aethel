@@ -1,0 +1,60 @@
+{
+  "name": "aethel",
+  "version": "0.1.0",
+  "description": "Git-style Google Drive sync CLI with interactive TUI",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aethel/aethel.git"
+  },
+  "homepage": "https://github.com/aethel/aethel#readme",
+  "bugs": {
+    "url": "https://github.com/aethel/aethel/issues"
+  },
+  "keywords": [
+    "google-drive",
+    "sync",
+    "cli",
+    "tui",
+    "backup",
+    "drive",
+    "file-manager"
+  ],
+  "bin": {
+    "aethel": "./src/cli.js"
+  },
+  "files": [
+    "src/",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "docs/ARCHITECTURE.md",
+    ".env.example"
+  ],
+  "scripts": {
+    "start": "node src/cli.js",
+    "auth": "node src/cli.js auth",
+    "clean": "node src/cli.js clean",
+    "install:cli": "bash scripts/install.sh",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm test && npm run pack:check",
+    "test": "node --test",
+    "tui": "node src/cli.js tui"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "googleapis": "^140.0.1",
+    "ignore": "^7.0.5",
+    "ink": "^5.1.0",
+    "ink-select-input": "^6.0.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "open": "^10.1.0",
+    "react": "^18.3.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

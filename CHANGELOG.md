@@ -1,0 +1,9 @@
+# Changelog
+
+## 0.1.0
+
+- Initial npm release of the Aethel CLI and Ink TUI
+- Google Drive OAuth authentication and workspace initialization
+- Git-style sync workflow with snapshot, diff, staging, pull, push, and commit
+- Conflict resolution, restore, ignore management, and history inspection
+- Duplicate-folder detection and reconciliation for Google Drive

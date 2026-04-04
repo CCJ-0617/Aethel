@@ -1,0 +1,33 @@
+node_modules/
+.DS_Store
+.aethel/
+.claude/
+
+# Credentials / secrets
+credentials.json
+token.json
+client_secret*.json
+.env
+.env.*
+
+# Python artifacts
+.venv/
+__pycache__/
+*.pyc
+
+# LaTeX build output
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.synctex.gz
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project docs
+PROGRESS.md
+TODO.md
