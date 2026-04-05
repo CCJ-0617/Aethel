@@ -226,6 +226,15 @@ async function fetchAllItems(drive, { fields, includeSharedDrives = false } = {}
   const files = [];
   let pageToken = null;
 
+  // Fetch the real My Drive root folder metadata in parallel with
+  // the main list.  Google Drive API returns actual folder IDs in
+  // `parents` (e.g. "0AJ…"), NOT the alias "root".  Without this,
+  // the orphan checker can't recognise the root and marks every
+  // top-level folder as orphaned — silently dropping all files.
+  const rootPromise = drive.files
+    .get({ fileId: "root", fields: "id,name,mimeType,parents,createdTime" })
+    .catch(() => null);
+
   const listOpts = {
     q: "trashed = false",
     fields: allFields,
@@ -251,6 +260,12 @@ async function fetchAllItems(drive, { fields, includeSharedDrives = false } = {}
 
     pageToken = response.data.nextPageToken;
   } while (pageToken);
+
+  // Add the real root folder so the orphan checker can walk up to it.
+  const rootRes = await rootPromise;
+  if (rootRes?.data?.id) {
+    folders.set(rootRes.data.id, rootRes.data);
+  }
 
   return { folders, files };
 }
