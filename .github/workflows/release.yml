@@ -1,16 +1,7 @@
-name: Publish (manual)
+name: Publish GitHub Packages (manual)
 
 on:
   workflow_dispatch:
-    inputs:
-      target:
-        description: "Publish target"
-        required: true
-        type: choice
-        options:
-          - both
-          - npm
-          - github-packages
 
 concurrency:
   group: release
@@ -19,11 +10,9 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment: npm
     permissions:
       contents: read
       packages: write
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -43,30 +32,13 @@ jobs:
       - name: Verify package contents
         run: npm run pack:check
 
-      # ── npm ──
-      - name: Setup npm registry
-        if: inputs.target == 'npm' || inputs.target == 'both'
-        uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-          registry-url: https://registry.npmjs.org
-
-      - name: Publish to npm
-        if: inputs.target == 'npm' || inputs.target == 'both'
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      # ── GitHub Packages ──
       - name: Setup GitHub Packages registry
-        if: inputs.target == 'github-packages' || inputs.target == 'both'
         uses: actions/setup-node@v6
         with:
           node-version: lts/*
           registry-url: https://npm.pkg.github.com
 
       - name: Scope package for GitHub Packages
-        if: inputs.target == 'github-packages' || inputs.target == 'both'
         run: |
           node -e "
             const pkg = require('./package.json');
@@ -76,7 +48,6 @@ jobs:
           "
 
       - name: Publish to GitHub Packages
-        if: inputs.target == 'github-packages' || inputs.target == 'both'
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
