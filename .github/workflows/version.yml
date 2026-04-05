@@ -18,10 +18,13 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write
 
 jobs:
-  version:
+  release:
     runs-on: ubuntu-latest
+    environment: npm
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -39,6 +42,9 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Verify package contents
+        run: npm run pack:check
 
       - name: Configure git
         run: |
@@ -63,7 +69,6 @@ jobs:
           ${{ inputs.summary }}
           SUMMARY_EOF
           )
-          # Prepend new entry after the "# Changelog" header
           ENTRY="## ${VERSION} (${DATE})\n\n- ${SUMMARY}"
           sed -i "0,/^# Changelog$/s/^# Changelog$/# Changelog\n\n${ENTRY}/" CHANGELOG.md
 
@@ -87,12 +92,43 @@ jobs:
           ${{ inputs.summary }}
           SUMMARY_EOF
           )
-
           NOTES="- ${SUMMARY}"
           if [ -n "$PREV_TAG" ]; then
             NOTES="${NOTES}
 
           **Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
           fi
-
           gh release create "$TAG" --title "$TAG" --notes "$NOTES"
+
+      # ── Publish to npm ──
+      - name: Setup npm registry
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # ── Publish to GitHub Packages ──
+      - name: Setup GitHub Packages registry
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          registry-url: https://npm.pkg.github.com
+
+      - name: Scope package for GitHub Packages
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            pkg.name = '@ccj-0617/aethel';
+            pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Publish to GitHub Packages
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
