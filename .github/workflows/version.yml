@@ -69,8 +69,9 @@ jobs:
           ${{ inputs.summary }}
           SUMMARY_EOF
           )
-          ENTRY="## ${VERSION} (${DATE})\n\n- ${SUMMARY}"
-          sed -i "0,/^# Changelog$/s/^# Changelog$/# Changelog\n\n${ENTRY}/" CHANGELOG.md
+          ENTRY="## ${VERSION} (${DATE})\\n\\n- ${SUMMARY}"
+          # Use | as sed delimiter to avoid conflicts with / in summary text
+          sed -i "0,/^# Changelog$/s|^# Changelog$|# Changelog\n\n${ENTRY}|" CHANGELOG.md
 
       - name: Commit, tag, and push
         run: |
