@@ -31,6 +31,7 @@ import {
   DuplicateFoldersError,
 } from "./core/drive-api.js";
 import { createDefaultIgnoreFile, loadIgnoreRules } from "./core/ignore.js";
+import { createProgressBar, createSpinner } from "./core/progress.js";
 import { Repository } from "./core/repository.js";
 import { runTui } from "./tui/index.js";
 
@@ -42,14 +43,34 @@ function addAuthOptions(command) {
     .option("--token <path>", "Path to cached OAuth token JSON");
 }
 
-async function openRepo(options, { requireWorkspace = true } = {}) {
+async function openRepo(options, { requireWorkspace = true, silent = false } = {}) {
   const root = requireWorkspace ? requireRoot() : null;
   const repo = new Repository(root, {
     credentials: options.credentials,
     token: options.token,
   });
-  await repo.connect();
+  const spinner = silent ? null : createSpinner("Connecting to Google Drive...");
+  try {
+    await repo.connect();
+    spinner?.succeed("Connected to Google Drive");
+  } catch (err) {
+    spinner?.fail("Connection failed");
+    throw err;
+  }
   return repo;
+}
+
+async function loadStateWithProgress(repo, opts) {
+  const spinner = createSpinner("Loading workspace state...");
+  try {
+    const state = await repo.loadState(opts);
+    const n = state.diff.changes.length;
+    spinner.succeed(n ? `Loaded state — ${n} change(s) detected` : "Loaded state — everything up to date");
+    return state;
+  } catch (err) {
+    spinner.fail("Failed to load workspace state");
+    throw err;
+  }
 }
 
 function matchesPattern(targetPath, pattern) {
@@ -117,7 +138,9 @@ function requireConfirmation(options) {
 
 async function handleAuth(options) {
   const repo = await openRepo(options, { requireWorkspace: false });
+  const spinner = createSpinner("Fetching account info...");
   const account = await repo.getAccountInfo();
+  spinner.succeed(`Authenticated as ${account.email}`);
 
   const credentialsPath = resolveCredentialsPath(options.credentials);
   await persistCredentials(credentialsPath);
@@ -134,7 +157,9 @@ async function handleAuth(options) {
 async function handleClean(options) {
   requireConfirmation(options);
   const repo = await openRepo(options, { requireWorkspace: false });
+  const spinner = createSpinner("Listing remote files...");
   const files = await repo.listRemoteFiles({ includeSharedDrives: Boolean(options.sharedDrives) });
+  spinner.succeed(`Found ${files.length} file(s) on Drive`);
 
   printCleanerPlan(files, options);
 
@@ -148,13 +173,15 @@ async function handleClean(options) {
     return;
   }
 
+  const bar = createProgressBar(`Cleaning ${files.length} file(s)`, files.length);
   const result = await repo.batchOperateFiles(files, {
     permanent: Boolean(options.permanent),
     includeSharedDrives: Boolean(options.sharedDrives),
-    onProgress: (done, total, verb, name) => {
-      console.log(`[${done}/${total}] ${verb}: ${name}`);
+    onProgress: (done) => {
+      bar.update(done);
     },
   });
+  bar.done(`Cleaned ${files.length} file(s)`);
 
   if (result.errors) {
     console.log(`Completed with ${result.errors} error(s) out of ${files.length} file(s).`);
@@ -171,8 +198,9 @@ async function handleInit(options) {
   // Interactive folder selection when no --drive-folder is provided
   if (!driveFolderId) {
     const repo = await openRepo(options, { requireWorkspace: false });
-    console.log("Fetching root-level Drive folders...");
+    const spinner = createSpinner("Fetching root-level Drive folders...");
     const folders = await repo.listRootFolders();
+    spinner.succeed(`Found ${folders.length} folder(s) in Drive root`);
 
     if (folders.length === 0) {
       console.log("No folders found in Drive root. Syncing entire My Drive.");
@@ -225,7 +253,7 @@ async function handleInit(options) {
 
 async function handleStatus(options) {
   const repo = await openRepo(options);
-  const { diff } = await repo.loadState();
+  const { diff } = await loadStateWithProgress(repo);
   const staged = repo.getStagedEntries();
 
   if (diff.isClean && staged.length === 0) {
@@ -264,7 +292,7 @@ async function handleStatus(options) {
 
 async function handleDiff(options) {
   const repo = await openRepo(options);
-  const { diff } = await repo.loadState();
+  const { diff } = await loadStateWithProgress(repo);
 
   if (diff.isClean) {
     console.log("No changes detected.");
@@ -298,7 +326,7 @@ async function handleDiff(options) {
 
 async function handleAdd(paths, options) {
   const repo = await openRepo(options);
-  const { diff } = await repo.loadState();
+  const { diff } = await loadStateWithProgress(repo);
 
   if (options.all) {
     const toStage = diff.changes.filter(
@@ -367,25 +395,22 @@ async function handleCommit(options, { repo: existingRepo } = {}) {
   }
 
   const message = options.message || "sync";
+  const bar = createProgressBar(`Syncing ${staged.length} change(s)`, staged.length);
 
-  console.log(`Committing ${staged.length} change(s)...`);
-
-  const result = await repo.executeStaged((done, total, verb, name) => {
-    if (done < total) {
-      console.log(`  [${done + 1}/${total}] ${verb}: ${name}`);
-    }
+  const result = await repo.executeStaged((done) => {
+    bar.update(done + 1);
   });
 
-  console.log(`\nCommit complete: ${result.summary}`);
+  bar.done(`Commit complete: ${result.summary}`);
   if (result.errors.length) {
     for (const error of result.errors) {
       console.log(`  ERROR: ${error}`);
     }
   }
 
-  console.log("Saving snapshot...");
+  const spinner = createSpinner("Saving snapshot...");
   await repo.saveSnapshot(message);
-  console.log(`Snapshot saved: "${message}"`);
+  spinner.succeed(`Snapshot saved: "${message}"`);
 }
 
 function handleLog(options) {
@@ -409,10 +434,10 @@ async function handleFetch(options) {
   const repo = await openRepo(options);
 
   repo.invalidateRemoteCache();
-  console.log("Fetching remote file list...");
+  const spinner = createSpinner("Fetching remote file list...");
   const remoteState = await repo.getRemoteState({ useCache: false });
   const remote = remoteState.files;
-  console.log(`Found ${remote.length} file(s) on Drive.`);
+  spinner.succeed(`Found ${remote.length} file(s) on Drive`);
 
   const snapshot = repo.getSnapshot();
   if (snapshot) {
@@ -445,7 +470,7 @@ async function handleFetch(options) {
 
 async function handlePull(paths, options) {
   const repo = await openRepo(options);
-  const { diff } = await repo.loadState({ useCache: false });
+  const { diff } = await loadStateWithProgress(repo, { useCache: false });
 
   let remoteChanges = diff.changes.filter((change) =>
     [
@@ -494,7 +519,7 @@ async function handlePull(paths, options) {
 
 async function handlePush(paths, options) {
   const repo = await openRepo(options);
-  const { diff } = await repo.loadState({ useCache: false });
+  const { diff } = await loadStateWithProgress(repo, { useCache: false });
 
   let localChanges = diff.changes.filter((change) =>
     [
@@ -543,7 +568,7 @@ async function handlePush(paths, options) {
 
 async function handleResolve(paths, options) {
   const repo = await openRepo(options);
-  const { diff } = await repo.loadState();
+  const { diff } = await loadStateWithProgress(repo);
   const conflicts = diff.conflicts;
 
   if (conflicts.length === 0) {
@@ -719,7 +744,7 @@ async function handleRestore(paths, options) {
     }
 
     const localDest = path.join(root, entry.localPath || entry.path);
-    console.log(`  Restoring ${targetPath} from Drive...`);
+    const spinner = createSpinner(`Restoring ${targetPath}...`);
 
     try {
       const meta = await repo.drive.files.get({
@@ -729,16 +754,16 @@ async function handleRestore(paths, options) {
 
       const { downloadFile } = await import("./core/drive-api.js");
       await downloadFile(repo.drive, { ...meta.data, id: entry.id }, localDest);
-      console.log(`  Restored: ${targetPath}`);
+      spinner.succeed(`Restored: ${targetPath}`);
     } catch (err) {
-      console.log(`  Failed to restore ${targetPath}: ${err.message}`);
+      spinner.fail(`Failed to restore ${targetPath}: ${err.message}`);
     }
   }
 }
 
 async function handleRm(paths, options) {
   const repo = await openRepo(options);
-  const { diff } = await repo.loadState();
+  const { diff } = await loadStateWithProgress(repo);
   const root = repo.root;
 
   for (const targetPath of paths) {
@@ -784,7 +809,7 @@ async function handleMv(source, dest, options) {
 }
 
 async function handleTui(options) {
-  const repo = await openRepo(options, { requireWorkspace: false });
+  const repo = await openRepo(options, { requireWorkspace: false, silent: true });
   const cliArgs = [];
   if (options.credentials) {
     cliArgs.push("--credentials", options.credentials);
@@ -819,6 +844,7 @@ async function handleDedupeFolders(options) {
   const config = repo.getConfig();
   const rootFolderId = config.drive_folder_id || null;
   const ignoreRules = loadIgnoreRules(repo.root);
+  const dedupeSpinner = createSpinner("Scanning for duplicate folders...");
   const result = await dedupeDuplicateFolders(repo.drive, rootFolderId, {
     execute: Boolean(options.execute),
     ignoreRules,
@@ -848,8 +874,9 @@ async function handleDedupeFolders(options) {
     },
   });
 
+  dedupeSpinner.succeed(`Scan complete — ${result.duplicateFolders.length} duplicate group(s) found`);
+
   if (result.duplicateFolders.length === 0) {
-    console.log("No duplicate folders detected.");
     return;
   }
 
