@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import fsSyncFallback from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { URL } from "node:url";
 import { google } from "googleapis";
 import open from "open";
@@ -10,8 +10,7 @@ import open from "open";
 const SCOPES = ["https://www.googleapis.com/auth/drive"];
 const DEFAULT_CREDENTIALS_PATH = "credentials.json";
 const DEFAULT_TOKEN_PATH = "token.json";
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = path.resolve(MODULE_DIR, "..", "..");
+const CONFIG_DIR = path.join(os.homedir(), ".config", "aethel");
 const AUTH_TIMEOUT_MS = 120_000;
 
 // ── Path resolution ─────────────────────────────────────────────────
@@ -22,7 +21,12 @@ function resolvePath(candidatePath, fallbackFileName) {
       ? candidatePath
       : path.resolve(process.cwd(), candidatePath);
   }
-  return path.join(PROJECT_ROOT, fallbackFileName);
+  // Also check cwd before falling back to ~/.config/aethel/
+  const cwdPath = path.resolve(process.cwd(), fallbackFileName);
+  if (fsSyncFallback.existsSync(cwdPath)) {
+    return cwdPath;
+  }
+  return path.join(CONFIG_DIR, fallbackFileName);
 }
 
 export function resolveCredentialsPath(customPath) {
@@ -47,7 +51,15 @@ async function loadClientConfig(credentialsPath) {
     raw = await fs.readFile(credentialsPath, "utf8");
   } catch {
     throw new Error(
-      `OAuth credentials file was not found. Expected path: ${credentialsPath}`
+      `OAuth credentials file not found: ${credentialsPath}\n\n` +
+      "Setup steps:\n" +
+      "  1. Go to https://console.cloud.google.com/\n" +
+      "  2. Create a project and enable the Google Drive API\n" +
+      "  3. Create an OAuth 2.0 Client ID (Desktop application)\n" +
+      "  4. Download the credentials JSON and save it as:\n" +
+      `     ${path.join(CONFIG_DIR, DEFAULT_CREDENTIALS_PATH)}\n\n` +
+      "Or pass a custom path:\n" +
+      "  aethel auth --credentials /path/to/credentials.json"
     );
   }
 

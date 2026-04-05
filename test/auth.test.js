@@ -17,11 +17,11 @@ test("getAuthClient preserves missing-credentials errors", async () => {
 
   await assert.rejects(
     getAuthClient(missingCredentialsPath, tokenPath),
-    /OAuth credentials file was not found/
+    /OAuth credentials file not found/
   );
 
   await assert.rejects(
     getAuthClient(missingCredentialsPath, tokenPath),
-    /OAuth credentials file was not found/
+    /OAuth credentials file not found/
   );
 });
