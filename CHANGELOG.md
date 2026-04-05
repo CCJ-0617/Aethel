@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.7 (2026-04-05)
+
+- Fix orphan checker not recognizing My Drive root — all files under synced folders were silently dropped
+
 ## 0.3.6 (2026-04-05)
 
 - Optimize status and saveSnapshot performance: parallelize loadState, skip redundant fetches, increase hash concurrency
