@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 (2026-04-05)
+
+- Retry npm publish after CI release attempt
+
 ## 0.2.1 (2026-04-05)
 
 - Fix auth error propagation
