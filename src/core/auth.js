@@ -29,6 +29,21 @@ function resolvePath(candidatePath, fallbackFileName) {
   return path.join(CONFIG_DIR, fallbackFileName);
 }
 
+export { CONFIG_DIR };
+
+/**
+ * Copy a credentials file into ~/.config/aethel/ so future commands
+ * work without --credentials. No-op if the file is already there.
+ */
+export async function persistCredentials(sourcePath) {
+  const dest = path.join(CONFIG_DIR, DEFAULT_CREDENTIALS_PATH);
+  const resolved = path.resolve(sourcePath);
+  if (resolved === dest) return;
+  if (fsSyncFallback.existsSync(dest)) return;
+  await fs.mkdir(CONFIG_DIR, { recursive: true });
+  await fs.copyFile(resolved, dest);
+}
+
 export function resolveCredentialsPath(customPath) {
   return resolvePath(
     customPath || process.env.GOOGLE_DRIVE_CREDENTIALS_PATH,
