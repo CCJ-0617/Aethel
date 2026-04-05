@@ -1,6 +1,6 @@
 {
   "name": "aethel",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Git-style Google Drive sync CLI with interactive TUI",
   "type": "module",
   "license": "MIT",

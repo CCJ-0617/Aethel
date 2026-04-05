@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6 (2026-04-05)
+
+- Optimize status and saveSnapshot performance: parallelize loadState, skip redundant fetches, increase hash concurrency
+
 ## 0.3.5 (2026-04-05)
 
 - Add progress bars and spinners for all time-consuming CLI operations
