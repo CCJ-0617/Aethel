@@ -39,7 +39,8 @@ npm run install:cli   # symlinks `aethel` into ~/.local/bin
 ## GitHub Automation
 
 - `CI`: runs `npm ci`, `npm test`, and `npm run pack:check` on every push and pull request across Node.js 18, 20, and 22
-- `Release`: publishes to npm with trusted publishing when a GitHub Release is published or when the workflow is triggered manually
+- `Version & Release`: bumps the version, updates the changelog, creates a GitHub Release, publishes to npm, and publishes to GitHub Packages
+- `Publish GitHub Packages (manual)`: manually publishes the package to GitHub Packages only
 - `Dependabot`: opens weekly dependency update PRs for npm packages and GitHub Actions
 
 To enable npm trusted publishing, configure a trusted publisher for package `aethel` on npm with:
@@ -47,9 +48,9 @@ To enable npm trusted publishing, configure a trusted publisher for package `aet
 - provider: GitHub Actions
 - owner: `CCJ-0617`
 - repository: `Aethel`
-- workflow filename: `release.yml`
+- workflow filename: `version.yml`
 
-After trusted publishing works once, disable token-based publishing in npm package settings and revoke any old npm automation tokens.
+After trusted publishing works once, disable token-based npm publishing in GitHub Actions and revoke any old npm automation tokens.
 
 ## Google Cloud Setup
 

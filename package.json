@@ -6,11 +6,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aethel/aethel.git"
+    "url": "git+https://github.com/CCJ-0617/Aethel.git"
   },
-  "homepage": "https://github.com/aethel/aethel#readme",
+  "homepage": "https://github.com/CCJ-0617/Aethel#readme",
   "bugs": {
-    "url": "https://github.com/aethel/aethel/issues"
+    "url": "https://github.com/CCJ-0617/Aethel/issues"
   },
   "keywords": [
     "google-drive",
