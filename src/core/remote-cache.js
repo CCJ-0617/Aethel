@@ -45,6 +45,7 @@ export function readRemoteCache(root, rootFolderId = null, ttlMs = DEFAULT_TTL_M
 
 export function writeRemoteCache(root, remoteState, rootFolderId = null) {
   const p = cachePath(root);
+  // Compact JSON — cache can be large with many files
   fs.writeFileSync(
     p,
     JSON.stringify({

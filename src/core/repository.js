@@ -112,17 +112,19 @@ export class Repository {
   async loadState({ useCache = true } = {}) {
     const config = this.getConfig();
 
-    const [local, snapshot] = await Promise.all([
+    // Run all three in parallel — remote fetch is the slowest, overlap it
+    // with local scan and snapshot read.
+    const [local, snapshot, remoteState] = await Promise.all([
       scanLocal(this._root),
       Promise.resolve(readLatestSnapshot(this._root)),
+      this._loadRemoteState({ useCache }),
     ]);
-
-    const remoteState = await this._loadRemoteState({ useCache });
     const remote = remoteState.files;
 
     return {
       config,
       remote,
+      remoteState,
       local,
       snapshot,
       diff: computeDiff(snapshot, remote, local, { root: this._root }),
@@ -178,20 +180,31 @@ export class Repository {
   }
 
   /**
-   * Invalidate cache, re-fetch remote + re-scan local, write snapshot.
+   * Build and persist a new snapshot.
+   *
+   * @param {string} message
+   * @param {object} [preloaded]
+   * @param {object} [preloaded.remote]  Reuse this remote state (skip API call)
+   * @param {object} [preloaded.local]   Reuse this local scan  (skip fs walk)
    */
-  async saveSnapshot(message = "sync") {
+  async saveSnapshot(message = "sync", { remote, local } = {}) {
     const config = this.getConfig();
     const rootFolderId = config.drive_folder_id || null;
 
-    invalidateRemoteCache(this._root);
-    const [remoteState, local] = await Promise.all([
-      getRemoteState(this.drive, rootFolderId),
-      scanLocal(this._root),
+    // Only fetch what wasn't pre-loaded, in parallel.
+    const needRemote = !remote;
+    const needLocal = !local;
+
+    if (needRemote) invalidateRemoteCache(this._root);
+
+    const [remoteState, localFiles] = await Promise.all([
+      needRemote ? getRemoteState(this.drive, rootFolderId) : remote,
+      needLocal ? scanLocal(this._root) : local,
     ]);
+
     assertNoDuplicateFolders(remoteState.duplicateFolders);
     writeRemoteCache(this._root, remoteState, rootFolderId);
-    writeSnapshot(this._root, buildSnapshot(remoteState.files, local, message));
+    writeSnapshot(this._root, buildSnapshot(remoteState.files, localFiles, message));
   }
 
   // ── Cache management ────────────────────────────────────────────────

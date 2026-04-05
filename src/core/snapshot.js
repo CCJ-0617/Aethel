@@ -42,7 +42,7 @@ function saveHashCache(root, cache) {
 
 // ── Scanning ─────────────────────────────────────────────────────────
 
-const PARALLEL_HASH_LIMIT = 32;
+const PARALLEL_HASH_LIMIT = 128;
 
 export async function scanLocal(root, { respectIgnore = true } = {}) {
   const resolvedRoot = path.resolve(root);
@@ -54,7 +54,8 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
   const filesToHash = [];
   // Track directories and their child counts to detect empty folders
   const dirChildCount = new Map();
-  const dirStats = new Map();
+  // Map relative dir path → absolute path (for deferred stat on empty dirs only)
+  const dirAbsPath = new Map();
 
   async function walk(currentPath) {
     let entries;
@@ -72,6 +73,7 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
     if (relativeDirPath !== null) {
       if (!dirChildCount.has(relativeDirPath)) {
         dirChildCount.set(relativeDirPath, 0);
+        dirAbsPath.set(relativeDirPath, currentPath);
       }
     }
 
@@ -110,12 +112,6 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
 
     if (relativeDirPath !== null) {
       dirChildCount.set(relativeDirPath, trackedChildren);
-      try {
-        const stat = await fs.promises.stat(currentPath);
-        dirStats.set(relativeDirPath, stat);
-      } catch {
-        // ignore
-      }
     }
 
     await Promise.all([
@@ -171,16 +167,24 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
     }
   }
 
-  for (const dirPath of emptyDirs) {
-    const stat = dirStats.get(dirPath);
+  // Only stat the empty directories (not all directories)
+  await Promise.all([...emptyDirs].map(async (dirPath) => {
+    let mtime = new Date().toISOString();
+    const absPath = dirAbsPath.get(dirPath);
+    if (absPath) {
+      try {
+        const stat = await fs.promises.stat(absPath);
+        mtime = new Date(stat.mtimeMs).toISOString();
+      } catch { /* ignore */ }
+    }
     result[dirPath] = {
       localPath: dirPath,
       isFolder: true,
       size: 0,
       md5: null,
-      modifiedTime: stat ? new Date(stat.mtimeMs).toISOString() : new Date().toISOString(),
+      modifiedTime: mtime,
     };
-  }
+  }));
 
   // Persist updated cache
   saveHashCache(resolvedRoot, nextCache);
