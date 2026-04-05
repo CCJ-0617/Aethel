@@ -163,16 +163,12 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   const changes = [];
   const snapshotFiles = snapshot?.files || {};
   const snapshotLocalFiles = snapshot?.localFiles || {};
-  const snapshotById = new Map();
 
-  for (const [fileId, meta] of Object.entries(snapshotFiles)) {
-    snapshotById.set(fileId, meta);
-  }
-
-  const remoteById = new Map(remoteFiles.map((file) => [file.id, file]));
-
+  // Build remote lookup and detect additions/modifications in one pass
+  const remoteById = new Map();
   for (const remoteFile of remoteFiles) {
-    const snapshotEntry = snapshotById.get(remoteFile.id);
+    remoteById.set(remoteFile.id, remoteFile);
+    const snapshotEntry = snapshotFiles[remoteFile.id];
 
     if (!snapshotEntry) {
       changes.push(
@@ -199,8 +195,10 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
     }
   }
 
-  for (const [fileId, snapshotEntry] of snapshotById.entries()) {
+  // Detect remote deletions — snapshot entries missing from remote
+  for (const fileId of Object.keys(snapshotFiles)) {
     if (!remoteById.has(fileId)) {
+      const snapshotEntry = snapshotFiles[fileId];
       changes.push(
         createChange({
           changeType: ChangeType.REMOTE_DELETED,

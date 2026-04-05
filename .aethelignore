@@ -1,0 +1,35 @@
+# Aethel ignore patterns (gitignore syntax)
+# Lines starting with # are comments.
+# See https://git-scm.com/docs/gitignore for pattern syntax.
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+
+# Build output
+dist/
+build/
+*.pyc
+*.o
+*.so
+
+# Secrets and credentials
+.env
+*.pem
+*.key
+credentials.json
+token.json
+client_secret*.json
