@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0 (2026-04-05)
+
+- Refactor to Repository pattern; add TUI command system with catalog, CLI runner, and tests
+
 ## 0.2.6 (2026-04-05)
 
 - Rewrite README with clearer structure and usage examples
