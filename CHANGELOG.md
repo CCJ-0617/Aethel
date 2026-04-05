@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6 (2026-04-05)
+
+- Rewrite README with clearer structure and usage examples
+
 ## 0.2.5 (2026-04-05)
 
 - Fix Node.js v25 Proxy invariant violation in withDriveRetry
