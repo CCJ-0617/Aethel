@@ -28,6 +28,9 @@ docs/*.synctex.gz
 *.swo
 *~
 
+# Papers / research
+papers/
+
 # Project docs
 PROGRESS.md
 TODO.md
