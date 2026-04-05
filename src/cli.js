@@ -3,34 +3,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
-import { authenticate, resolveCredentialsPath, resolveTokenPath } from "./core/auth.js";
+import { resolveCredentialsPath, resolveTokenPath } from "./core/auth.js";
 import {
-  AETHEL_DIR,
-  HISTORY_DIR,
-  LATEST_SNAPSHOT,
-  SNAPSHOTS_DIR,
   initWorkspace,
-  readConfig,
-  readLatestSnapshot,
   requireRoot,
-  writeSnapshot,
 } from "./core/config.js";
-import { ChangeType, computeDiff } from "./core/diff.js";
+import { ChangeType } from "./core/diff.js";
 import {
-  assertNoDuplicateFolders,
-  batchOperateFiles,
   dedupeDuplicateFolders,
-  getRemoteState,
-  getAccountInfo,
-  listAccessibleFiles,
   DuplicateFoldersError,
-  withDriveRetry,
 } from "./core/drive-api.js";
 import { createDefaultIgnoreFile, loadIgnoreRules } from "./core/ignore.js";
-import { invalidateRemoteCache, readRemoteCache, writeRemoteCache } from "./core/remote-cache.js";
-import { buildSnapshot, scanLocal } from "./core/snapshot.js";
-import { stageChange, stageChanges, stageConflictResolution, stagedEntries, unstageAll, unstagePath } from "./core/staging.js";
-import { executeStaged } from "./core/sync.js";
+import { Repository } from "./core/repository.js";
 import { runTui } from "./tui/index.js";
 
 const REQUIRED_CONFIRMATION = "DELETE ALL MY GOOGLE DRIVE FILES";
@@ -41,22 +25,14 @@ function addAuthOptions(command) {
     .option("--token <path>", "Path to cached OAuth token JSON");
 }
 
-async function getDrive(options = {}) {
-  const drive = await authenticate(options.credentials, options.token);
-  return withDriveRetry(drive);
-}
-
-async function loadRemoteState(root, drive, config, { useCache = true } = {}) {
-  const rootFolderId = config.drive_folder_id || null;
-  let remoteState = useCache ? readRemoteCache(root, rootFolderId) : null;
-
-  if (!remoteState) {
-    remoteState = await getRemoteState(drive, rootFolderId);
-    writeRemoteCache(root, remoteState, rootFolderId);
-  }
-
-  assertNoDuplicateFolders(remoteState.duplicateFolders);
-  return remoteState;
+async function openRepo(options, { requireWorkspace = true } = {}) {
+  const root = requireWorkspace ? requireRoot() : null;
+  const repo = new Repository(root, {
+    credentials: options.credentials,
+    token: options.token,
+  });
+  await repo.connect();
+  return repo;
 }
 
 function matchesPattern(targetPath, pattern) {
@@ -122,33 +98,9 @@ function requireConfirmation(options) {
   }
 }
 
-async function loadWorkspaceState(root, options, { useCache = true } = {}) {
-  const config = readConfig(root);
-
-  // Start auth, local scan, and snapshot read all in parallel.
-  const [drive, local, snapshot] = await Promise.all([
-    getDrive(options),
-    scanLocal(root),
-    Promise.resolve(readLatestSnapshot(root)),
-  ]);
-
-  // Try the short-lived remote cache first (saves a full API round-trip)
-  const remoteState = await loadRemoteState(root, drive, config, { useCache });
-  const remote = remoteState.files;
-
-  return {
-    config,
-    drive,
-    remote,
-    local,
-    snapshot,
-    diff: computeDiff(snapshot, remote, local, { root }),
-  };
-}
-
 async function handleAuth(options) {
-  const drive = await getDrive(options);
-  const account = await getAccountInfo(drive);
+  const repo = await openRepo(options, { requireWorkspace: false });
+  const account = await repo.getAccountInfo();
 
   console.log("OAuth initialization completed.");
   console.log(`Credentials path: ${resolveCredentialsPath(options.credentials)}`);
@@ -161,8 +113,8 @@ async function handleAuth(options) {
 
 async function handleClean(options) {
   requireConfirmation(options);
-  const drive = await getDrive(options);
-  const files = await listAccessibleFiles(drive, Boolean(options.sharedDrives));
+  const repo = await openRepo(options, { requireWorkspace: false });
+  const files = await repo.listRemoteFiles({ includeSharedDrives: Boolean(options.sharedDrives) });
 
   printCleanerPlan(files, options);
 
@@ -176,7 +128,7 @@ async function handleClean(options) {
     return;
   }
 
-  const result = await batchOperateFiles(drive, files, {
+  const result = await repo.batchOperateFiles(files, {
     permanent: Boolean(options.permanent),
     includeSharedDrives: Boolean(options.sharedDrives),
     onProgress: (done, total, verb, name) => {
@@ -219,9 +171,9 @@ async function handleInit(options) {
 }
 
 async function handleStatus(options) {
-  const root = requireRoot();
-  const { diff } = await loadWorkspaceState(root, options);
-  const staged = stagedEntries(root);
+  const repo = await openRepo(options);
+  const { diff } = await repo.loadState();
+  const staged = repo.getStagedEntries();
 
   if (diff.isClean && staged.length === 0) {
     console.log("Everything up to date.");
@@ -258,8 +210,8 @@ async function handleStatus(options) {
 }
 
 async function handleDiff(options) {
-  const root = requireRoot();
-  const { diff } = await loadWorkspaceState(root, options);
+  const repo = await openRepo(options);
+  const { diff } = await repo.loadState();
 
   if (diff.isClean) {
     console.log("No changes detected.");
@@ -292,14 +244,14 @@ async function handleDiff(options) {
 }
 
 async function handleAdd(paths, options) {
-  const root = requireRoot();
-  const { diff } = await loadWorkspaceState(root, options);
+  const repo = await openRepo(options);
+  const { diff } = await repo.loadState();
 
   if (options.all) {
     const toStage = diff.changes.filter(
       (change) => change.suggestedAction !== "conflict"
     );
-    const count = stageChanges(root, toStage);
+    const count = repo.stageChanges(toStage);
     console.log(`Staged ${count} change(s).`);
     return;
   }
@@ -323,7 +275,7 @@ async function handleAdd(paths, options) {
         continue;
       }
 
-      stageChange(root, change);
+      repo.stageChange(change);
       stagedCount += 1;
       console.log(`  Staged: ${change.path}`);
     }
@@ -334,15 +286,16 @@ async function handleAdd(paths, options) {
 
 function handleReset(paths, options) {
   const root = requireRoot();
+  const repo = new Repository(root);
 
   if (options.all) {
-    const count = unstageAll(root);
+    const count = repo.unstageAll();
     console.log(`Unstaged ${count} change(s).`);
     return;
   }
 
   for (const targetPath of paths || []) {
-    if (unstagePath(root, targetPath)) {
+    if (repo.unstagePath(targetPath)) {
       console.log(`  Unstaged: ${targetPath}`);
       continue;
     }
@@ -351,23 +304,20 @@ function handleReset(paths, options) {
   }
 }
 
-async function handleCommit(options) {
-  const root = requireRoot();
-  const config = readConfig(root);
-  const staged = stagedEntries(root);
+async function handleCommit(options, { repo: existingRepo } = {}) {
+  const repo = existingRepo || await openRepo(options);
+  const staged = repo.getStagedEntries();
 
   if (!staged.length) {
     console.log("Nothing staged. Use 'aethel add' first.");
     return;
   }
 
-  const drive = await getDrive(options);
   const message = options.message || "sync";
-  await loadRemoteState(root, drive, config, { useCache: true });
 
   console.log(`Committing ${staged.length} change(s)...`);
 
-  const result = await executeStaged(drive, root, (done, total, verb, name) => {
+  const result = await repo.executeStaged((done, total, verb, name) => {
     if (done < total) {
       console.log(`  [${done + 1}/${total}] ${verb}: ${name}`);
     }
@@ -381,47 +331,21 @@ async function handleCommit(options) {
   }
 
   console.log("Saving snapshot...");
-  invalidateRemoteCache(root);
-  const [remoteState, local] = await Promise.all([
-    getRemoteState(drive, config.drive_folder_id || null),
-    scanLocal(root),
-  ]);
-  assertNoDuplicateFolders(remoteState.duplicateFolders);
-  writeRemoteCache(root, remoteState, config.drive_folder_id || null);
-  writeSnapshot(root, buildSnapshot(remoteState.files, local, message));
+  await repo.saveSnapshot(message);
   console.log(`Snapshot saved: "${message}"`);
 }
 
 function handleLog(options) {
   const root = requireRoot();
-  const snapshotsPath = path.join(root, AETHEL_DIR, SNAPSHOTS_DIR);
-  const entries = [];
-  const latestPath = path.join(snapshotsPath, LATEST_SNAPSHOT);
-
-  if (fs.existsSync(latestPath)) {
-    entries.push(JSON.parse(fs.readFileSync(latestPath, "utf8")));
-  }
-
-  const historyPath = path.join(snapshotsPath, HISTORY_DIR);
-  if (fs.existsSync(historyPath)) {
-    const historyFiles = fs
-      .readdirSync(historyPath)
-      .filter((fileName) => fileName.endsWith(".json"))
-      .sort()
-      .reverse();
-
-    for (const fileName of historyFiles) {
-      const fullPath = path.join(historyPath, fileName);
-      entries.push(JSON.parse(fs.readFileSync(fullPath, "utf8")));
-    }
-  }
+  const repo = new Repository(root);
+  const entries = repo.getHistory(options.limit || 10);
 
   if (!entries.length) {
     console.log("No commits yet.");
     return;
   }
 
-  for (const snapshot of entries.slice(0, options.limit || 10)) {
+  for (const snapshot of entries) {
     console.log(
       `  ${snapshot.timestamp || "?"}  ${snapshot.message || "(no message)"}  (${Object.keys(snapshot.files || {}).length} files)`
     );
@@ -429,23 +353,18 @@ function handleLog(options) {
 }
 
 async function handleFetch(options) {
-  const root = requireRoot();
-  const config = readConfig(root);
-  const drive = await getDrive(options);
-  const snapshot = readLatestSnapshot(root);
+  const repo = await openRepo(options);
 
-  invalidateRemoteCache(root);
+  repo.invalidateRemoteCache();
   console.log("Fetching remote file list...");
-  const remoteState = await getRemoteState(drive, config.drive_folder_id || null);
-  writeRemoteCache(root, remoteState, config.drive_folder_id || null);
-  assertNoDuplicateFolders(remoteState.duplicateFolders);
+  const remoteState = await repo.getRemoteState({ useCache: false });
   const remote = remoteState.files;
   console.log(`Found ${remote.length} file(s) on Drive.`);
 
-  // Show what changed on remote since last snapshot
+  const snapshot = repo.getSnapshot();
   if (snapshot) {
-    const local = await scanLocal(root);
-    const diff = computeDiff(snapshot, remote, local, { root });
+    const local = await repo.scanLocal();
+    const diff = repo.computeDiff(snapshot, remote, local);
     const remoteChanges = diff.remoteChanges;
     const conflicts = diff.conflicts;
 
@@ -472,8 +391,8 @@ async function handleFetch(options) {
 }
 
 async function handlePull(paths, options) {
-  const root = requireRoot();
-  const { diff } = await loadWorkspaceState(root, options, { useCache: false });
+  const repo = await openRepo(options);
+  const { diff } = await repo.loadState({ useCache: false });
 
   let remoteChanges = diff.changes.filter((change) =>
     [
@@ -483,18 +402,16 @@ async function handlePull(paths, options) {
     ].includes(change.changeType)
   );
 
-  // Include conflicts resolved as "theirs" when --force is set
   if (options.force) {
     const conflicts = diff.conflicts;
     if (conflicts.length) {
       console.log(`Force-pulling ${conflicts.length} conflict(s) (remote wins)...`);
       for (const c of conflicts) {
-        stageConflictResolution(root, c, "theirs");
+        repo.stageConflictResolution(c, "theirs");
       }
     }
   }
 
-  // Filter to specific paths if provided
   if (paths && paths.length > 0) {
     remoteChanges = remoteChanges.filter((change) =>
       paths.some((p) => matchesPattern(change.path, p))
@@ -517,14 +434,14 @@ async function handlePull(paths, options) {
     return;
   }
 
-  const count = stageChanges(root, remoteChanges);
+  const count = repo.stageChanges(remoteChanges);
   console.log(`Staged ${count} remote change(s). Committing...`);
-  await handleCommit({ ...options, message: options.message || "pull" });
+  await handleCommit({ ...options, message: options.message || "pull" }, { repo });
 }
 
 async function handlePush(paths, options) {
-  const root = requireRoot();
-  const { diff } = await loadWorkspaceState(root, options, { useCache: false });
+  const repo = await openRepo(options);
+  const { diff } = await repo.loadState({ useCache: false });
 
   let localChanges = diff.changes.filter((change) =>
     [
@@ -534,18 +451,16 @@ async function handlePush(paths, options) {
     ].includes(change.changeType)
   );
 
-  // Include conflicts resolved as "ours" when --force is set
   if (options.force) {
     const conflicts = diff.conflicts;
     if (conflicts.length) {
       console.log(`Force-pushing ${conflicts.length} conflict(s) (local wins)...`);
       for (const c of conflicts) {
-        stageConflictResolution(root, c, "ours");
+        repo.stageConflictResolution(c, "ours");
       }
     }
   }
 
-  // Filter to specific paths if provided
   if (paths && paths.length > 0) {
     localChanges = localChanges.filter((change) =>
       paths.some((p) => matchesPattern(change.path, p))
@@ -568,14 +483,14 @@ async function handlePush(paths, options) {
     return;
   }
 
-  const count = stageChanges(root, localChanges);
+  const count = repo.stageChanges(localChanges);
   console.log(`Staged ${count} local change(s). Committing...`);
-  await handleCommit({ ...options, message: options.message || "push" });
+  await handleCommit({ ...options, message: options.message || "push" }, { repo });
 }
 
 async function handleResolve(paths, options) {
-  const root = requireRoot();
-  const { diff } = await loadWorkspaceState(root, options);
+  const repo = await openRepo(options);
+  const { diff } = await repo.loadState();
   const conflicts = diff.conflicts;
 
   if (conflicts.length === 0) {
@@ -618,7 +533,7 @@ async function handleResolve(paths, options) {
   const strategyLabel = { ours: "local wins", theirs: "remote wins", both: "keep both" };
 
   for (const conflict of toResolve) {
-    stageConflictResolution(root, conflict, strategy);
+    repo.stageConflictResolution(conflict, strategy);
     console.log(`  Resolved: ${conflict.path} → ${strategyLabel[strategy]}`);
   }
 
@@ -669,34 +584,24 @@ function handleIgnore(subcommand, args) {
 
 function handleShow(ref, options) {
   const root = requireRoot();
-  const snapshotsPath = path.join(root, AETHEL_DIR, SNAPSHOTS_DIR);
+  const repo = new Repository(root);
 
-  let snapshot;
+  const snapshot = repo.getSnapshotByRef(ref);
 
-  if (!ref || ref === "HEAD" || ref === "latest") {
-    snapshot = readLatestSnapshot(root);
-    if (!snapshot) {
+  if (!snapshot) {
+    if (!ref || ref === "HEAD" || ref === "latest") {
       console.log("No commits yet.");
-      return;
-    }
-  } else {
-    // Try to match a history file by prefix
-    const historyPath = path.join(snapshotsPath, HISTORY_DIR);
-    if (!fs.existsSync(historyPath)) {
-      console.log("No commit history found.");
-      return;
-    }
-    const files = fs.readdirSync(historyPath).filter((f) => f.endsWith(".json")).sort().reverse();
-    const match = files.find((f) => f.startsWith(ref));
-    if (!match) {
+    } else {
       console.log(`No snapshot matching '${ref}' found.`);
-      console.log("Available snapshots:");
-      for (const f of files.slice(0, 10)) {
-        console.log(`  ${f.replace(".json", "")}`);
+      const history = repo.getHistory(10);
+      if (history.length) {
+        console.log("Available snapshots:");
+        for (const s of history) {
+          console.log(`  ${s.timestamp || "?"}`);
+        }
       }
-      return;
     }
-    snapshot = JSON.parse(fs.readFileSync(path.join(historyPath, match), "utf-8"));
+    return;
   }
 
   console.log(`Snapshot: ${snapshot.timestamp || "?"}`);
@@ -738,16 +643,15 @@ function handleShow(ref, options) {
 }
 
 async function handleRestore(paths, options) {
-  const root = requireRoot();
-  const config = readConfig(root);
-  const snapshot = readLatestSnapshot(root);
+  const repo = await openRepo(options);
+  const snapshot = repo.getSnapshot();
 
   if (!snapshot) {
     console.log("No snapshot to restore from. Run 'aethel commit' first.");
     return;
   }
 
-  const drive = await getDrive(options);
+  const root = repo.root;
   const remoteFiles = snapshot.files || {};
 
   for (const targetPath of paths) {
@@ -765,13 +669,13 @@ async function handleRestore(paths, options) {
     console.log(`  Restoring ${targetPath} from Drive...`);
 
     try {
-      const meta = await drive.files.get({
+      const meta = await repo.drive.files.get({
         fileId: entry.id,
         fields: "id,name,mimeType",
       });
 
       const { downloadFile } = await import("./core/drive-api.js");
-      await downloadFile(drive, { ...meta.data, id: entry.id }, localDest);
+      await downloadFile(repo.drive, { ...meta.data, id: entry.id }, localDest);
       console.log(`  Restored: ${targetPath}`);
     } catch (err) {
       console.log(`  Failed to restore ${targetPath}: ${err.message}`);
@@ -780,23 +684,22 @@ async function handleRestore(paths, options) {
 }
 
 async function handleRm(paths, options) {
-  const root = requireRoot();
-  const { diff } = await loadWorkspaceState(root, options);
+  const repo = await openRepo(options);
+  const { diff } = await repo.loadState();
+  const root = repo.root;
 
   for (const targetPath of paths) {
-    // Delete locally
     const localAbs = path.join(root, targetPath);
     if (fs.existsSync(localAbs)) {
       await fs.promises.rm(localAbs, { recursive: true });
       console.log(`  Deleted locally: ${targetPath}`);
     }
 
-    // If it exists on remote, stage a delete_remote
     const remoteChange = diff.changes.find(
       (c) => c.path === targetPath && c.fileId
     );
     if (remoteChange) {
-      stageChange(root, {
+      repo.stageChange({
         ...remoteChange,
         changeType: ChangeType.LOCAL_DELETED,
         suggestedAction: "delete_remote",
@@ -828,10 +731,19 @@ async function handleMv(source, dest, options) {
 }
 
 async function handleTui(options) {
-  const drive = await getDrive(options);
+  const repo = await openRepo(options, { requireWorkspace: false });
+  const cliArgs = [];
+  if (options.credentials) {
+    cliArgs.push("--credentials", options.credentials);
+  }
+  if (options.token) {
+    cliArgs.push("--token", options.token);
+  }
   await runTui({
-    drive,
+    repo,
     includeSharedDrives: Boolean(options.sharedDrives),
+    cliPath: path.resolve(process.argv[1]),
+    cliArgs,
   });
 }
 
@@ -850,12 +762,11 @@ function printDedupeSummary(result) {
 }
 
 async function handleDedupeFolders(options) {
-  const root = requireRoot();
-  const config = readConfig(root);
-  const drive = await getDrive(options);
+  const repo = await openRepo(options);
+  const config = repo.getConfig();
   const rootFolderId = config.drive_folder_id || null;
-  const ignoreRules = loadIgnoreRules(root);
-  const result = await dedupeDuplicateFolders(drive, rootFolderId, {
+  const ignoreRules = loadIgnoreRules(repo.root);
+  const result = await dedupeDuplicateFolders(repo.drive, rootFolderId, {
     execute: Boolean(options.execute),
     ignoreRules,
     onProgress: (event) => {
@@ -893,7 +804,7 @@ async function handleDedupeFolders(options) {
   printDedupeSummary(result);
 
   if (options.execute) {
-    invalidateRemoteCache(root);
+    repo.invalidateRemoteCache();
     if (result.remainingDuplicateFolders.length > 0) {
       throw new DuplicateFoldersError(result.remainingDuplicateFolders);
     }

@@ -255,11 +255,59 @@ async function fetchAllItems(drive, { fields, includeSharedDrives = false } = {}
   return { folders, files };
 }
 
+/**
+ * Build a cached orphan checker. A folder is "orphaned" if its parent
+ * chain leads to a trashed/inaccessible folder rather than "root".
+ *
+ * When a folder is trashed, Google Drive does NOT mark its children as
+ * trashed. They remain `trashed = false` but their parent is gone from
+ * our fetched folder map, making them "orphaned".
+ */
+function createOrphanChecker(folders) {
+  const cache = new Map();
+
+  return function isOrphaned(folderId) {
+    if (cache.has(folderId)) return cache.get(folderId);
+
+    // Walk the chain, collecting unresolved IDs
+    const pending = [];
+    let current = folderId;
+
+    while (current) {
+      if (current === "root") {
+        for (const id of pending) cache.set(id, false);
+        return false;
+      }
+      if (cache.has(current)) {
+        const result = cache.get(current);
+        for (const id of pending) cache.set(id, result);
+        return result;
+      }
+      pending.push(current);
+      const folder = folders.get(current);
+      if (!folder) {
+        for (const id of pending) cache.set(id, true);
+        return true;
+      }
+      current = folder.parents?.[0] || "";
+    }
+
+    // No parent — root-level
+    for (const id of pending) cache.set(id, false);
+    return false;
+  };
+}
+
 function buildRemoteFiles(folders, rawFiles, rootFolderId = null) {
   const resolve = createFolderResolver(folders, rootFolderId);
+  const isOrphaned = createOrphanChecker(folders);
   const files = [];
   for (const file of rawFiles) {
     const parentId = file.parents?.[0] || "";
+
+    // Skip files whose parent folder was trashed (orphaned children)
+    if (parentId && isOrphaned(parentId)) continue;
+
     const parentPath = parentId === rootFolderId ? "" : resolve(parentId);
 
     if (rootFolderId && parentPath === null) continue;
@@ -646,26 +694,21 @@ export async function listAccessibleFiles(drive, includeSharedDrives = false) {
     includeSharedDrives,
   });
 
-  // Build resolver from the folders already collected
-  const pathCache = new Map();
-  function resolveFolderPath(folderId) {
-    if (pathCache.has(folderId)) return pathCache.get(folderId);
-    if (!folderId) { pathCache.set(folderId, ""); return ""; }
-    const folder = folders.get(folderId);
-    if (!folder) { pathCache.set(folderId, ""); return ""; }
-    const parentPath = resolveFolderPath(folder.parents?.[0] || "");
-    const result = parentPath ? path.posix.join(parentPath, folder.name) : folder.name;
-    pathCache.set(folderId, result);
-    return result;
-  }
+  const resolveFolderPath = createFolderResolver(folders, null);
+  const isOrphaned = createOrphanChecker(folders);
 
   // Combine folders + files into result list (TUI needs folders too)
+  // Filter out orphaned items (children of trashed folders)
   const allItems = [...folders.values(), ...rawItems];
   const result = [];
 
   for (const file of allItems) {
     const parentId = file.parents?.[0] || "";
-    const parentPath = resolveFolderPath(parentId);
+
+    // Skip orphaned items (children of trashed folders)
+    if (parentId && isOrphaned(parentId)) continue;
+
+    const parentPath = resolveFolderPath(parentId) || "";
     const itemPath = parentPath
       ? path.posix.join(parentPath, file.name)
       : file.name;

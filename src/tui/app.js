@@ -1,25 +1,20 @@
 import path from "node:path";
+import { spawn } from "node:child_process";
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import Spinner from "ink-spinner";
 import TextInput from "ink-text-input";
 import {
-  batchOperateFiles,
-  getAccountInfo,
   humanSize,
   iconForMime,
-  listAccessibleFiles,
   sourceBadgeForItem,
-  syncLocalDirectoryToParent,
-  uploadLocalEntry,
 } from "../core/drive-api.js";
 import {
   defaultLocalRoot,
-  deleteLocalEntry,
   ensureLocalDirectory,
-  listLocalEntries,
-  renameLocalEntry,
 } from "../core/local-fs.js";
+import { COMMAND_CATALOG } from "./command-catalog.js";
+import { parseCommandInput } from "./commands.js";
 
 const h = React.createElement;
 
@@ -137,25 +132,148 @@ function renderHelp() {
       marginTop: 1,
       flexDirection: "column",
     },
-    h(Text, { bold: true }, "Aethel TUI - Keyboard Shortcuts"),
-    h(Text, null, "Tab            Switch focus between Drive and Local panes"),
-    h(Text, null, "Up/Down, j/k   Navigate the focused pane"),
-    h(Text, null, "Left/Right     Move to parent or enter directory in focused pane"),
-    h(Text, null, "u              Upload selected local entry to current Drive directory"),
-    h(Text, null, "s              Sync selected local directory contents to current Drive directory"),
-    h(Text, null, "n              Rename selected local file or directory"),
-    h(Text, null, "x              Delete selected local file or directory"),
-    h(Text, null, "Space          Toggle Drive selection in Drive pane"),
-    h(Text, null, "t / d          Trash or permanently delete selected Drive items"),
-    h(Text, null, "/              Filter the focused pane"),
-    h(Text, null, "U              Manually enter a local path and upload"),
-    h(Text, null, "r              Reload Drive and Local panes"),
-    h(Text, null, "q              Quit"),
-    h(Text, { dimColor: true }, "Press any key to close this help.")
+    h(Text, { bold: true }, "Keyboard Shortcuts"),
+    h(Text, null, ""),
+    h(Text, { color: "cyan" }, "Navigation"),
+    h(Text, null, "  Tab          Switch panes        Left/Right  Parent / Enter dir"),
+    h(Text, null, "  j/k          Move cursor          /          Filter by name"),
+    h(Text, null, ""),
+    h(Text, { color: "cyan" }, "Local Pane"),
+    h(Text, null, "  u  Upload to Drive    s  Sync dir to Drive    U  Upload by path"),
+    h(Text, null, "  n  Rename             x  Delete"),
+    h(Text, null, ""),
+    h(Text, { color: "cyan" }, "Drive Pane"),
+    h(Text, null, "  Space  Toggle select   a  Select all    t  Trash    d  Delete"),
+    h(Text, null, ""),
+    h(Text, { color: "cyan" }, "Commands"),
+    h(Text, null, "  f  Open command panel             :  Run CLI command directly"),
+    h(Text, null, "  r  Reload panes                   q  Quit"),
+    h(Text, { dimColor: true }, "Press any key to close.")
   );
 }
 
-export function AethelTui({ drive, includeSharedDrives = false }) {
+function renderCommandCatalog(width, height, cursor) {
+  const listHeight = Math.max(height - 7, 6);
+  const start = scrollWindow(COMMAND_CATALOG.length, cursor, listHeight);
+  const visibleEntries = COMMAND_CATALOG.slice(start, start + listHeight);
+  const currentEntry = COMMAND_CATALOG[cursor] || null;
+
+  return h(
+    Box,
+    {
+      borderStyle: "round",
+      borderColor: "cyan",
+      paddingX: 1,
+      flexDirection: "column",
+    },
+    ...visibleEntries.map((entry, index) =>
+      h(
+        Text,
+        {
+          key: entry.name,
+          inverse: start + index === cursor,
+          color: start + index === cursor ? "cyan" : undefined,
+          wrap: "truncate-end",
+        },
+        truncate(`${entry.name.padEnd(16, " ")} ${entry.description}`, width - 4)
+      )
+    ),
+    currentEntry
+      ? h(
+          Text,
+          { dimColor: true },
+          truncate(`> aethel ${currentEntry.template}`, width - 4)
+        )
+      : null
+  );
+}
+
+function renderCommandActions(width, height, command, cursor) {
+  const actions = [
+    ...command.actions,
+    { label: "Custom Command", command: command.template },
+  ];
+  const listHeight = Math.max(height - 8, 5);
+  const start = scrollWindow(actions.length, cursor, listHeight);
+  const visibleEntries = actions.slice(start, start + listHeight);
+  const currentAction = actions[cursor] || null;
+
+  return h(
+    Box,
+    {
+      borderStyle: "round",
+      borderColor: "cyan",
+      paddingX: 1,
+      flexDirection: "column",
+    },
+    h(Text, { bold: true }, truncate(`${command.name}`, width - 4)),
+    ...visibleEntries.map((entry, index) =>
+      h(
+        Text,
+        {
+          key: `${command.name}-${entry.label}`,
+          inverse: start + index === cursor,
+          color: start + index === cursor ? "cyan" : undefined,
+          wrap: "truncate-end",
+        },
+        truncate(entry.label, width - 4)
+      )
+    ),
+    currentAction
+      ? h(
+          Text,
+          { dimColor: true },
+          truncate(`> aethel ${currentAction.command}`, width - 4)
+        )
+      : null
+  );
+}
+
+function renderCommandOutput(commandResult, width, height, scroll) {
+  const outputLines = commandResult.output
+    ? commandResult.output.split(/\r?\n/)
+    : ["(no output)"];
+  const bodyHeight = Math.max(height - 8, 4);
+  const maxScroll = Math.max(outputLines.length - bodyHeight, 0);
+  const start = Math.min(scroll, maxScroll);
+  const visibleLines = outputLines.slice(start, start + bodyHeight);
+
+  return h(
+    Box,
+    {
+      borderStyle: "round",
+      borderColor: commandResult.exitCode === 0 ? "cyan" : "red",
+      paddingX: 1,
+      marginTop: 1,
+      flexDirection: "column",
+    },
+    h(Text, { bold: true }, truncate(`Command: aethel ${commandResult.command}`, width - 4)),
+    h(
+      Text,
+      { color: commandResult.exitCode === 0 ? "green" : "red" },
+      `Exit code: ${commandResult.exitCode}`
+    ),
+    ...visibleLines.map((line, index) =>
+      h(
+        Text,
+        { key: `${start + index}`, wrap: "truncate-end" },
+        truncate(line || " ", width - 4)
+      )
+    ),
+    h(
+      Text,
+      { dimColor: true },
+      truncate("Up/Down/PageUp/PageDown/Home/End: scroll  Enter/Esc: close", width - 4)
+    )
+  );
+}
+
+export function AethelTui({
+  repo,
+  includeSharedDrives = false,
+  cliPath = null,
+  cliArgs = [],
+}) {
   const { exit } = useApp();
   const [mode, setMode] = useState("loading");
   const [remoteLoading, setRemoteLoading] = useState(true);
@@ -175,6 +293,11 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
   const [errorMessage, setErrorMessage] = useState("");
   const [pendingAction, setPendingAction] = useState(null);
   const [inputValue, setInputValue] = useState("");
+  const [commandResult, setCommandResult] = useState(null);
+  const [commandScroll, setCommandScroll] = useState(0);
+  const [commandCursor, setCommandCursor] = useState(0);
+  const [commandActionCursor, setCommandActionCursor] = useState(0);
+  const [commandReturnMode, setCommandReturnMode] = useState("normal");
   const width = process.stdout.columns || 80;
   const height = process.stdout.rows || 24;
   const currentRemoteFolderId = remoteFolderStack.length
@@ -236,6 +359,7 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
 
   const currentLocalEntry = filteredLocalEntries[localCursor] || null;
   const currentRemoteEntry = filteredRemoteEntries[remoteCursor] || null;
+  const currentCatalogCommand = COMMAND_CATALOG[commandCursor] || null;
   const currentRemoteFolderMeta = currentRemoteFolderId
     ? remoteFiles.find((file) => file.id === currentRemoteFolderId) || null
     : null;
@@ -255,9 +379,15 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
     );
   }, [filteredLocalEntries.length]);
 
+  useEffect(() => {
+    setCommandCursor((current) =>
+      Math.min(current, Math.max(COMMAND_CATALOG.length - 1, 0))
+    );
+  }, []);
+
   async function loadLocalPane(nextDirectory = localDirectory) {
     const resolvedDirectory = await ensureLocalDirectory(nextDirectory);
-    const items = await listLocalEntries(resolvedDirectory);
+    const items = await repo.listLocalEntries(resolvedDirectory);
     setLocalDirectory(resolvedDirectory);
     setLocalEntries(items);
     setLocalCursor(0);
@@ -282,13 +412,17 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
     // Fetch remote in background
     try {
       const [nextAccount, nextRemoteFiles] = await Promise.all([
-        getAccountInfo(drive),
-        listAccessibleFiles(drive, includeSharedDrives),
+        repo.getAccountInfo(),
+        repo.listRemoteFiles({ includeSharedDrives }),
       ]);
+      const remoteIds = new Set(nextRemoteFiles.map((file) => file.id));
+      const resolvedRemoteFolderStack = nextRemoteFolderStack.filter((folder) =>
+        remoteIds.has(folder.id)
+      );
 
       setAccount(nextAccount);
       setRemoteFiles(nextRemoteFiles);
-      setRemoteFolderStack(nextRemoteFolderStack);
+      setRemoteFolderStack(resolvedRemoteFolderStack);
       setSelectedRemoteIds(new Set());
       setRemoteLoading(false);
       setStatus(
@@ -313,7 +447,7 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
 
     setMode("busy");
     try {
-      const result = await batchOperateFiles(drive, targets, {
+      const result = await repo.batchOperateFiles(targets, {
         permanent,
         includeSharedDrives,
         onProgress: (done, total, verb, name) => {
@@ -341,8 +475,7 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
 
     setMode("busy");
     try {
-      const result = await uploadLocalEntry(
-        drive,
+      const result = await repo.uploadLocalEntry(
         trimmedPath,
         currentUploadParentId,
         (verb, localPath, name) => {
@@ -368,8 +501,7 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
   async function executeSyncDirectory(targetPath) {
     setMode("busy");
     try {
-      const result = await syncLocalDirectoryToParent(
-        drive,
+      const result = await repo.syncLocalDirectory(
         targetPath,
         currentUploadParentId,
         (verb, localPath, name) => {
@@ -394,7 +526,7 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
   async function executeLocalDelete(targetPath) {
     setMode("busy");
     try {
-      await deleteLocalEntry(targetPath);
+      await repo.deleteLocalEntry(targetPath);
       await loadLocalPane(path.dirname(targetPath) === targetPath ? localDirectory : localDirectory);
       setMode("normal");
       setStatus(`Deleted local entry: ${path.basename(targetPath)}`);
@@ -407,7 +539,7 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
   async function executeLocalRename(targetPath, nextName) {
     setMode("busy");
     try {
-      const renamedPath = await renameLocalEntry(targetPath, nextName);
+      const renamedPath = await repo.renameLocalEntry(targetPath, nextName);
       await loadLocalPane(path.dirname(renamedPath));
       setMode("normal");
       setStatus(`Renamed local entry to: ${path.basename(renamedPath)}`);
@@ -436,6 +568,91 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
     );
   }
 
+  function openCommandEditor(nextValue, returnMode = "normal") {
+    setInputValue(nextValue);
+    setCommandReturnMode(returnMode);
+    setMode("command");
+    setStatus("Edit the command and press Enter to run.");
+  }
+
+  function openCommandActions(index = commandCursor) {
+    setCommandCursor(index);
+    setCommandActionCursor(0);
+    setMode("command-actions");
+    setStatus("Choose a TUI action or edit the command.");
+  }
+
+  async function executeCliCommand(rawCommand, returnMode = commandReturnMode) {
+    if (!cliPath) {
+      setMode("normal");
+      setStatus("CLI command runner is unavailable.");
+      return;
+    }
+
+    setCommandReturnMode(returnMode);
+
+    let args;
+    try {
+      args = parseCommandInput(rawCommand);
+    } catch (error) {
+      setMode(returnMode);
+      setStatus(error.message);
+      return;
+    }
+
+    if (args.length === 0) {
+      setMode(returnMode);
+      setStatus("Command cancelled.");
+      return;
+    }
+
+    setMode("busy");
+    setStatus(`Running: aethel ${args.join(" ")}`);
+
+    const output = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [cliPath, ...cliArgs, ...args], {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", (error) => {
+        stderr += `${error.message}\n`;
+      });
+      child.on("close", (exitCode) => {
+        resolve({
+          command: args.join(" "),
+          exitCode: exitCode ?? 1,
+          output: [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n"),
+        });
+      });
+    });
+
+    setInputValue("");
+    setCommandResult(output);
+    setCommandScroll(
+      Math.max(output.output.split(/\r?\n/).length - Math.max(height - 8, 4), 0)
+    );
+
+    if (output.exitCode === 0) {
+      await loadAllData(`Command finished: aethel ${output.command}`, true);
+    } else {
+      setStatus(`Command failed: aethel ${output.command}`);
+      setMode("normal");
+    }
+
+    setMode("command-output");
+  }
+
   useInput((input, key) => {
     if ((key.ctrl && input === "c") || (mode === "error" && input === "q")) {
       exit();
@@ -455,6 +672,183 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
 
     if (mode === "help") {
       setMode("normal");
+      return;
+    }
+
+    if (mode === "commands-page") {
+      if (key.escape || input === "f" || input === "F") {
+        setMode("normal");
+        setStatus("Closed commands page.");
+        return;
+      }
+
+      if (input === ":") {
+        openCommandEditor("", "commands-page");
+        return;
+      }
+
+      if (key.return || key.rightArrow) {
+        if (currentCatalogCommand) {
+          openCommandActions(commandCursor);
+        }
+        return;
+      }
+
+      if (key.upArrow || input === "k") {
+        setCommandCursor((current) => Math.max(current - 1, 0));
+        return;
+      }
+
+      if (key.downArrow || input === "j") {
+        setCommandCursor((current) =>
+          Math.min(current + 1, Math.max(COMMAND_CATALOG.length - 1, 0))
+        );
+        return;
+      }
+
+      if (key.pageUp) {
+        setCommandCursor((current) =>
+          Math.max(current - Math.max(height - 11, 6), 0)
+        );
+        return;
+      }
+
+      if (key.pageDown) {
+        setCommandCursor((current) =>
+          Math.min(
+            current + Math.max(height - 11, 6),
+            Math.max(COMMAND_CATALOG.length - 1, 0)
+          )
+        );
+        return;
+      }
+
+      if (key.home) {
+        setCommandCursor(0);
+        return;
+      }
+
+      if (key.end) {
+        setCommandCursor(Math.max(COMMAND_CATALOG.length - 1, 0));
+      }
+      return;
+    }
+
+    if (mode === "command-actions") {
+      if (key.escape || key.leftArrow) {
+        setMode("commands-page");
+        setStatus("Back to commands list.");
+        return;
+      }
+
+      if (!currentCatalogCommand) {
+        setMode("commands-page");
+        return;
+      }
+
+      const availableActions = [
+        ...currentCatalogCommand.actions,
+        { label: "Custom Command", command: currentCatalogCommand.template },
+      ];
+      const currentAction = availableActions[commandActionCursor] || availableActions[0];
+
+      if (input === "e" || input === "E") {
+        openCommandEditor(currentAction.command, "command-actions");
+        return;
+      }
+
+      if (key.return) {
+        if (currentAction.label === "Custom Command") {
+          openCommandEditor(currentAction.command, "command-actions");
+        } else {
+          void executeCliCommand(currentAction.command, "command-actions");
+        }
+        return;
+      }
+
+      if (key.upArrow || input === "k") {
+        setCommandActionCursor((current) => Math.max(current - 1, 0));
+        return;
+      }
+
+      if (key.downArrow || input === "j") {
+        setCommandActionCursor((current) =>
+          Math.min(current + 1, Math.max(availableActions.length - 1, 0))
+        );
+        return;
+      }
+
+      if (key.pageUp) {
+        setCommandActionCursor((current) =>
+          Math.max(current - Math.max(height - 12, 5), 0)
+        );
+        return;
+      }
+
+      if (key.pageDown) {
+        setCommandActionCursor((current) =>
+          Math.min(
+            current + Math.max(height - 12, 5),
+            Math.max(availableActions.length - 1, 0)
+          )
+        );
+        return;
+      }
+
+      if (key.home) {
+        setCommandActionCursor(0);
+        return;
+      }
+
+      if (key.end) {
+        setCommandActionCursor(Math.max(availableActions.length - 1, 0));
+      }
+      return;
+    }
+
+    if (mode === "command-output") {
+      if (key.escape || key.return || input === "q" || input === "Q") {
+        setCommandResult(null);
+        setCommandScroll(0);
+        setMode(commandReturnMode);
+        return;
+      }
+
+      if (key.upArrow || input === "k") {
+        setCommandScroll((current) => Math.max(current - 1, 0));
+        return;
+      }
+
+      if (key.downArrow || input === "j") {
+        const lines = commandResult?.output?.split(/\r?\n/).length || 1;
+        const maxScroll = Math.max(lines - Math.max(height - 8, 4), 0);
+        setCommandScroll((current) => Math.min(current + 1, maxScroll));
+        return;
+      }
+
+      if (key.pageUp) {
+        setCommandScroll((current) => Math.max(current - Math.max(height - 8, 4), 0));
+        return;
+      }
+
+      if (key.pageDown) {
+        const lines = commandResult?.output?.split(/\r?\n/).length || 1;
+        const maxScroll = Math.max(lines - Math.max(height - 8, 4), 0);
+        setCommandScroll((current) =>
+          Math.min(current + Math.max(height - 8, 4), maxScroll)
+        );
+        return;
+      }
+
+      if (key.home) {
+        setCommandScroll(0);
+        return;
+      }
+
+      if (key.end) {
+        const lines = commandResult?.output?.split(/\r?\n/).length || 1;
+        setCommandScroll(Math.max(lines - Math.max(height - 8, 4), 0));
+      }
       return;
     }
 
@@ -542,6 +936,15 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
       return;
     }
 
+    if (mode === "command") {
+      if (key.escape) {
+        setInputValue("");
+        setMode(commandReturnMode);
+        setStatus("Command cancelled.");
+      }
+      return;
+    }
+
     if (mode === "rename") {
       if (key.escape) {
         setInputValue("");
@@ -570,6 +973,18 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
     if (input === "/") {
       setMode("filter");
       setStatus(`Type to filter the ${focusPane} pane.`);
+      return;
+    }
+
+    if (input === ":") {
+      openCommandEditor("", "normal");
+      setStatus("Enter an Aethel command without `aethel`.");
+      return;
+    }
+
+    if (input === "f" || input === "F") {
+      setMode("commands-page");
+      setStatus("Browse commands and press Enter to edit one.");
       return;
     }
 
@@ -704,7 +1119,7 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
     }
 
     if (focusPane === "local") {
-      if (input === "u" || input === "U") {
+      if (input === "u") {
         if (!currentLocalEntry) {
           setStatus("No local item is selected.");
           return;
@@ -873,7 +1288,7 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
     : "Drive: /";
   const localBreadcrumb = `Local: ${localDirectory}`;
   const selectedCount = selectedRemoteIds.size;
-  const contentHeight = Math.max(height - 10, 6);
+  const contentHeight = Math.max(height - 7, 6);
   const paneWidth = Math.max(Math.floor((width - 3) / 2), 24);
 
   if (mode === "error") {
@@ -899,49 +1314,77 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
     );
   }
 
-  let hints =
-    "Tab:focus  Left/Right:navigate  u:upload local  s:sync dir  n:rename local  x:delete local  Space:select drive  t/d:delete drive  /:filter  U:manual upload  r:reload  q:quit  ?:help";
+  if (mode === "commands-page") {
+    return h(
+      Box,
+      { flexDirection: "column" },
+      h(Text, { color: "cyan", bold: true }, truncate("Aethel Commands", width)),
+      h(Text, { dimColor: true }, truncate(status, width)),
+      renderCommandCatalog(width, height, commandCursor),
+      h(
+        Text,
+        { dimColor: true },
+        truncate("j/k:move  Enter:open  ::custom command  Esc:close", width)
+      )
+    );
+  }
+
+  if (mode === "command-actions" && currentCatalogCommand) {
+    return h(
+      Box,
+      { flexDirection: "column" },
+      h(Text, { color: "cyan", bold: true }, truncate("Aethel Commands", width)),
+      h(Text, { dimColor: true }, truncate(status, width)),
+      renderCommandActions(width, height, currentCatalogCommand, commandActionCursor),
+      h(
+        Text,
+        { dimColor: true },
+        truncate("j/k:move  Enter:run  e:edit  Esc:back", width)
+      )
+    );
+  }
+
+  let hints;
   if (mode === "filter") {
-    hints = "Enter: apply filter  Esc: cancel";
+    hints = "Enter: apply  Esc: cancel";
   } else if (mode === "confirm") {
     hints = "y: confirm  n: cancel";
   } else if (mode === "upload") {
-    hints = "Enter: upload path  Esc: cancel";
+    hints = "Enter: upload  Esc: cancel";
+  } else if (mode === "command") {
+    hints = "Enter: run  Esc: cancel";
   } else if (mode === "rename") {
     hints = "Enter: rename  Esc: cancel";
+  } else if (mode === "command-output") {
+    hints = "j/k: scroll  Enter/Esc: close";
+  } else {
+    hints = focusPane === "local"
+      ? "u:upload  s:sync  n:rename  x:delete  /:filter  Tab:switch  f:Commands  ?:help  q:quit"
+      : "Space:select  a:all  t:trash  d:delete  /:filter  Tab:switch  f:Commands  ?:help  q:quit";
   }
+
+  const headerRight = selectedCount > 0
+    ? `${selectedCount} selected`
+    : "";
 
   return h(
     Box,
     { flexDirection: "column" },
-    h(Text, { color: "cyan", bold: true }, truncate("Aethel", width)),
-    account
-      ? h(
-          Text,
-          null,
-          truncate(
-            `${account.name} <${account.email}> | ${account.usage} / ${account.limit}`,
-            width
-          )
+    h(
+      Box,
+      { justifyContent: "space-between" },
+      h(
+        Text,
+        { color: "cyan", bold: true },
+        truncate(
+          account ? `Aethel  ${account.email}  ${account.usage}/${account.limit}` : "Aethel",
+          width - headerRight.length - 2
         )
-      : null,
-    h(
-      Text,
-      { dimColor: true },
-      truncate(
-        `${driveBreadcrumb} | ${localBreadcrumb}`,
-        width
-      )
+      ),
+      headerRight
+        ? h(Text, { color: "yellow" }, headerRight)
+        : null
     ),
-    h(
-      Text,
-      { dimColor: true },
-      truncate(
-        `Legend: [MY ] owned by me  [SHR] shared with me  [DRV] shared drive  [LOC] local item | ${selectedCount} Drive item(s) selected | Upload ${currentRemoteFolderWritable ? "enabled" : "blocked"}`,
-        width
-      )
-    ),
-    h(Text, { dimColor: true }, "─".repeat(Math.max(Math.min(width, 80), 10))),
     h(
       Box,
       { flexDirection: "row" },
@@ -989,7 +1432,7 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
       ? h(
           Box,
           { flexDirection: "column" },
-          h(Text, { color: "cyan" }, "Local path to upload into current Drive directory:"),
+          h(Text, { color: "cyan" }, "Local path to upload:"),
           h(TextInput, {
             value: inputValue,
             onChange: setInputValue,
@@ -1003,7 +1446,7 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
       ? h(
           Box,
           { flexDirection: "column" },
-          h(Text, { color: "cyan" }, "New local name:"),
+          h(Text, { color: "cyan" }, "New name:"),
           h(TextInput, {
             value: inputValue,
             onChange: setInputValue,
@@ -1019,7 +1462,24 @@ export function AethelTui({ drive, includeSharedDrives = false }) {
           })
         )
       : null,
+    mode === "command"
+      ? h(
+          Box,
+          { flexDirection: "column" },
+          h(Text, { color: "cyan" }, "aethel "),
+          h(TextInput, {
+            value: inputValue,
+            onChange: setInputValue,
+            onSubmit: (value) => {
+              void executeCliCommand(value);
+            },
+          })
+        )
+      : null,
     h(Text, { dimColor: true }, truncate(hints, width)),
-    mode === "help" ? renderHelp() : null
+    mode === "help" ? renderHelp() : null,
+    mode === "command-output" && commandResult
+      ? renderCommandOutput(commandResult, width, height, commandScroll)
+      : null
   );
 }

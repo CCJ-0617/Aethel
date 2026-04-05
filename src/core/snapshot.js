@@ -61,6 +61,9 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
       return;
     }
 
+    const subdirs = [];
+    const statPromises = [];
+
     for (const entry of entries) {
       const fullPath = path.join(currentPath, entry.name);
       const relativePath = path
@@ -73,7 +76,7 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
       }
 
       if (entry.isDirectory()) {
-        await walk(fullPath);
+        subdirs.push(fullPath);
         continue;
       }
 
@@ -81,9 +84,17 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
         continue;
       }
 
-      const stat = await fs.promises.stat(fullPath);
-      filesToHash.push({ fullPath, relativePath, stat });
+      statPromises.push(
+        fs.promises.stat(fullPath).then((stat) => {
+          filesToHash.push({ fullPath, relativePath, stat });
+        })
+      );
     }
+
+    await Promise.all([
+      ...statPromises,
+      ...subdirs.map((dir) => walk(dir)),
+    ]);
   }
 
   await walk(resolvedRoot);

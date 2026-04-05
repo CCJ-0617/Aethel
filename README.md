@@ -123,6 +123,8 @@ Dual-pane file browser — local filesystem on the left, Google Drive on the rig
 | `Space` | Toggle selection in Drive pane |
 | `t` / `d` | Trash / permanently delete selected Drive items |
 | `/` | Filter by name |
+| `f` | Open the commands page and choose a TUI action |
+| `:` | Run any Aethel CLI command inside the TUI |
 
 ## Ignore Patterns
 
@@ -147,7 +149,31 @@ build/
 
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module structure and data flow.
+Aethel uses a **Repository pattern** — a single `Repository` class (`src/core/repository.js`) wraps all core modules and serves as the unified data-access layer for both the CLI and the TUI.
+
+```
+src/
+├── cli.js                    CLI entry — all handlers use Repository
+├── core/
+│   ├── repository.js         Unified data-access layer
+│   ├── auth.js               OAuth authentication
+│   ├── config.js             Workspace config & state persistence
+│   ├── diff.js               Change detection between states
+│   ├── drive-api.js          Google Drive API wrapper
+│   ├── local-fs.js           Local filesystem operations
+│   ├── remote-cache.js       Short-lived remote file cache
+│   ├── snapshot.js            Local scanning & snapshot creation
+│   ├── staging.js            Stage/unstage operations
+│   ├── sync.js               Execute staged changes
+│   └── ignore.js             .aethelignore pattern matching
+└── tui/
+    ├── app.js                React (Ink) dual-pane component
+    ├── index.js              TUI entry
+    ├── commands.js           CLI command parser for TUI
+    └── command-catalog.js    Available TUI commands
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed module structure and data flow.
 
 ## Contributing
 
