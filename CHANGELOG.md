@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2 (2026-04-05)
+
+- Add --version flag, interactive init folder selection, and release script
+
 ## 0.3.1 (2026-04-05)
 
 - Improve setup SOP: default credentials to ~/.config/aethel/ with guided error message
