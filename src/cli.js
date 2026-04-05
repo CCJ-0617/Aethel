@@ -60,12 +60,36 @@ async function openRepo(options, { requireWorkspace = true, silent = false } = {
   return repo;
 }
 
+function fmtMs(ms) {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
 async function loadStateWithProgress(repo, opts) {
   const spinner = createSpinner("Loading workspace state...");
   try {
-    const state = await repo.loadState(opts);
-    const n = state.diff.changes.length;
-    spinner.succeed(n ? `Loaded state — ${n} change(s) detected` : "Loaded state — everything up to date");
+    const state = await repo.loadState({
+      ...opts,
+      onPhase(phase, ms) {
+        if (phase === "local") spinner.update(`Scanned local files (${fmtMs(ms)}), waiting for remote...`);
+        else if (phase === "remote") spinner.update(`Fetched remote state (${fmtMs(ms)}), computing diff...`);
+      },
+    });
+    const { timings, diff } = state;
+    const n = diff.changes.length;
+
+    const parts = [
+      `${timings.localFiles} local`,
+      `${timings.remoteFiles} remote`,
+    ];
+    const times = [
+      `scan ${fmtMs(timings.localMs)}`,
+      timings.remoteCached ? `remote cache hit` : `fetch ${fmtMs(timings.remoteMs)}`,
+      `diff ${fmtMs(timings.diffMs)}`,
+      `total ${fmtMs(timings.totalMs)}`,
+    ];
+
+    const summary = n ? `${n} change(s)` : "up to date";
+    spinner.succeed(`${summary} (${parts.join(", ")}) [${times.join(" | ")}]`);
     return state;
   } catch (err) {
     spinner.fail("Failed to load workspace state");
@@ -408,11 +432,16 @@ async function handleCommit(options, { repo: existingRepo, snapshotHint } = {}) 
     }
   }
 
+  const snapshotStart = Date.now();
   const spinner = createSpinner("Saving snapshot...");
   // snapshotHint lets callers (pull/push) pass pre-loaded state
   // so saveSnapshot skips redundant API calls / fs scans.
   await repo.saveSnapshot(message, snapshotHint);
-  spinner.succeed(`Snapshot saved: "${message}"`);
+  const skipped = [];
+  if (snapshotHint?.remote) skipped.push("remote reused");
+  if (snapshotHint?.local) skipped.push("local reused");
+  const hint = skipped.length ? ` (${skipped.join(", ")})` : "";
+  spinner.succeed(`Snapshot saved in ${fmtMs(Date.now() - snapshotStart)}${hint}`);
 }
 
 function handleLog(options) {
@@ -436,10 +465,11 @@ async function handleFetch(options) {
   const repo = await openRepo(options);
 
   repo.invalidateRemoteCache();
+  const fetchStart = Date.now();
   const spinner = createSpinner("Fetching remote file list...");
   const remoteState = await repo.getRemoteState({ useCache: false });
   const remote = remoteState.files;
-  spinner.succeed(`Found ${remote.length} file(s) on Drive`);
+  spinner.succeed(`Found ${remote.length} file(s) on Drive [${fmtMs(Date.now() - fetchStart)}]`);
 
   const snapshot = repo.getSnapshot();
   if (snapshot) {

@@ -109,17 +109,39 @@ export class Repository {
    * Load full workspace state in parallel, replacing the old
    * loadWorkspaceState() helper from cli.js.
    */
-  async loadState({ useCache = true } = {}) {
+  async loadState({ useCache = true, onPhase } = {}) {
     const config = this.getConfig();
+    const t0 = Date.now();
 
     // Run all three in parallel — remote fetch is the slowest, overlap it
     // with local scan and snapshot read.
+    const timings = {};
+
     const [local, snapshot, remoteState] = await Promise.all([
-      scanLocal(this._root),
-      Promise.resolve(readLatestSnapshot(this._root)),
-      this._loadRemoteState({ useCache }),
+      scanLocal(this._root).then((r) => {
+        timings.localMs = Date.now() - t0;
+        onPhase?.("local", timings.localMs);
+        return r;
+      }),
+      Promise.resolve(readLatestSnapshot(this._root)).then((r) => {
+        timings.snapshotMs = Date.now() - t0;
+        return r;
+      }),
+      this._loadRemoteState({ useCache }).then((r) => {
+        timings.remoteMs = Date.now() - t0;
+        timings.remoteCached = useCache && timings.remoteMs < 100;
+        onPhase?.("remote", timings.remoteMs);
+        return r;
+      }),
     ]);
     const remote = remoteState.files;
+
+    const diffStart = Date.now();
+    const diff = computeDiff(snapshot, remote, local, { root: this._root });
+    timings.diffMs = Date.now() - diffStart;
+    timings.totalMs = Date.now() - t0;
+    timings.localFiles = Object.keys(local).length;
+    timings.remoteFiles = remote.length;
 
     return {
       config,
@@ -127,7 +149,8 @@ export class Repository {
       remoteState,
       local,
       snapshot,
-      diff: computeDiff(snapshot, remote, local, { root: this._root }),
+      diff,
+      timings,
     };
   }
 
