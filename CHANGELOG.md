@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5 (2026-04-05)
+
+- Add progress bars and spinners for all time-consuming CLI operations
+
 ## 0.3.4 (2026-04-05)
 
 - Add empty folder sync support between local and Google Drive
