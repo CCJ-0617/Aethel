@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.4 (2026-04-05)
+
+- Fix npm publish authentication in CI workflow
+
 ## 0.2.3 (2026-04-05)
 
 - Enable npm trusted publishing via version workflow
