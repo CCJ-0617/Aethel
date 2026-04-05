@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3 (2026-04-05)
+
+- Enable npm trusted publishing via version workflow
+
 ## 0.2.2 (2026-04-05)
 
 - Retry npm publish after CI release attempt
