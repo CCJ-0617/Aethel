@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1 (2026-04-05)
+
+- Add retry logic for Drive API calls
+
 ## 0.1.0
 
 - Initial npm release of the Aethel CLI and Ink TUI
