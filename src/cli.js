@@ -385,7 +385,7 @@ function handleReset(paths, options) {
   }
 }
 
-async function handleCommit(options, { repo: existingRepo } = {}) {
+async function handleCommit(options, { repo: existingRepo, snapshotHint } = {}) {
   const repo = existingRepo || await openRepo(options);
   const staged = repo.getStagedEntries();
 
@@ -409,7 +409,9 @@ async function handleCommit(options, { repo: existingRepo } = {}) {
   }
 
   const spinner = createSpinner("Saving snapshot...");
-  await repo.saveSnapshot(message);
+  // snapshotHint lets callers (pull/push) pass pre-loaded state
+  // so saveSnapshot skips redundant API calls / fs scans.
+  await repo.saveSnapshot(message, snapshotHint);
   spinner.succeed(`Snapshot saved: "${message}"`);
 }
 
@@ -470,7 +472,7 @@ async function handleFetch(options) {
 
 async function handlePull(paths, options) {
   const repo = await openRepo(options);
-  const { diff } = await loadStateWithProgress(repo, { useCache: false });
+  const { diff, remoteState } = await loadStateWithProgress(repo, { useCache: false });
 
   let remoteChanges = diff.changes.filter((change) =>
     [
@@ -514,12 +516,16 @@ async function handlePull(paths, options) {
 
   const count = repo.stageChanges(remoteChanges);
   console.log(`Staged ${count} remote change(s). Committing...`);
-  await handleCommit({ ...options, message: options.message || "pull" }, { repo });
+  // Pull downloads remote→local: remote state unchanged, only re-scan local
+  await handleCommit({ ...options, message: options.message || "pull" }, {
+    repo,
+    snapshotHint: { remote: remoteState },
+  });
 }
 
 async function handlePush(paths, options) {
   const repo = await openRepo(options);
-  const { diff } = await loadStateWithProgress(repo, { useCache: false });
+  const { diff, local } = await loadStateWithProgress(repo, { useCache: false });
 
   let localChanges = diff.changes.filter((change) =>
     [
@@ -563,7 +569,11 @@ async function handlePush(paths, options) {
 
   const count = repo.stageChanges(localChanges);
   console.log(`Staged ${count} local change(s). Committing...`);
-  await handleCommit({ ...options, message: options.message || "push" }, { repo });
+  // Push uploads local→remote: local state unchanged, only re-fetch remote
+  await handleCommit({ ...options, message: options.message || "push" }, {
+    repo,
+    snapshotHint: { local },
+  });
 }
 
 async function handleResolve(paths, options) {

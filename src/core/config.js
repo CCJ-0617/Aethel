@@ -113,5 +113,6 @@ export function writeSnapshot(root, snapshot) {
     fs.copyFileSync(latest, path.join(snapDir, HISTORY_DIR, `${ts}.json`));
   }
 
-  fs.writeFileSync(latest, JSON.stringify(snapshot, null, 2) + "\n");
+  // Compact JSON — snapshots can be large, pretty-printing is slow + wastes disk
+  fs.writeFileSync(latest, JSON.stringify(snapshot) + "\n");
 }
