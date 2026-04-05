@@ -20,7 +20,7 @@ function getGitHash() {
 
 const gitHash = getGitHash();
 const versionString = gitHash ? `${pkg.version} (${gitHash})` : pkg.version;
-import { resolveCredentialsPath, resolveTokenPath } from "./core/auth.js";
+import { persistCredentials, resolveCredentialsPath, resolveTokenPath } from "./core/auth.js";
 import {
   initWorkspace,
   requireRoot,
@@ -119,8 +119,11 @@ async function handleAuth(options) {
   const repo = await openRepo(options, { requireWorkspace: false });
   const account = await repo.getAccountInfo();
 
+  const credentialsPath = resolveCredentialsPath(options.credentials);
+  await persistCredentials(credentialsPath);
+
   console.log("OAuth initialization completed.");
-  console.log(`Credentials path: ${resolveCredentialsPath(options.credentials)}`);
+  console.log(`Credentials path: ${credentialsPath}`);
   console.log(`Token path: ${resolveTokenPath(options.token)}`);
   console.log(`Authenticated user: ${account.name}`);
   console.log(`Authenticated email: ${account.email}`);
