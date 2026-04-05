@@ -1,6 +1,11 @@
 # Aethel
 
-Git-style Google Drive sync CLI with an interactive terminal UI.
+[![CI](https://github.com/CCJ-0617/Aethel/actions/workflows/ci.yml/badge.svg)](https://github.com/CCJ-0617/Aethel/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/aethel)](https://www.npmjs.com/package/aethel)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
+
+**Git-style Google Drive sync CLI with an interactive terminal UI.**
 
 Aethel lets you manage a local workspace mirrored to Google Drive using
 familiar commands (`init`, `status`, `diff`, `add`, `commit`, `pull`, `push`)
@@ -184,6 +189,10 @@ npm publish
 
 For a GitHub release, push the tagged version and create a release that matches
 the published npm version.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 ## License
 
