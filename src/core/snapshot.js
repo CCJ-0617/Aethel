@@ -52,6 +52,9 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
 
   // Phase 1: collect all file stats (fast — no hashing yet)
   const filesToHash = [];
+  // Track directories and their child counts to detect empty folders
+  const dirChildCount = new Map();
+  const dirStats = new Map();
 
   async function walk(currentPath) {
     let entries;
@@ -61,8 +64,20 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
       return;
     }
 
+    const relativeDirPath = currentPath === resolvedRoot
+      ? null
+      : path.relative(resolvedRoot, currentPath).split(path.sep).join("/");
+
+    // Register this directory (skip root itself)
+    if (relativeDirPath !== null) {
+      if (!dirChildCount.has(relativeDirPath)) {
+        dirChildCount.set(relativeDirPath, 0);
+      }
+    }
+
     const subdirs = [];
     const statPromises = [];
+    let trackedChildren = 0;
 
     for (const entry of entries) {
       const fullPath = path.join(currentPath, entry.name);
@@ -76,6 +91,7 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
       }
 
       if (entry.isDirectory()) {
+        trackedChildren++;
         subdirs.push(fullPath);
         continue;
       }
@@ -84,11 +100,22 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
         continue;
       }
 
+      trackedChildren++;
       statPromises.push(
         fs.promises.stat(fullPath).then((stat) => {
           filesToHash.push({ fullPath, relativePath, stat });
         })
       );
+    }
+
+    if (relativeDirPath !== null) {
+      dirChildCount.set(relativeDirPath, trackedChildren);
+      try {
+        const stat = await fs.promises.stat(currentPath);
+        dirStats.set(relativeDirPath, stat);
+      } catch {
+        // ignore
+      }
     }
 
     await Promise.all([
@@ -119,6 +146,40 @@ export async function scanLocal(root, { respectIgnore = true } = {}) {
         modifiedTime: new Date(stat.mtimeMs).toISOString(),
       };
     }
+  }
+
+  // Phase 3: detect empty folders (directories with zero tracked children)
+  // Walk bottom-up: a dir is "empty" if it has no tracked children AND
+  // all its subdirectories are also empty.
+  const emptyDirs = new Set();
+  // Sort by depth (deepest first) for bottom-up processing
+  const sortedDirs = [...dirChildCount.keys()].sort(
+    (a, b) => b.split("/").length - a.split("/").length
+  );
+
+  for (const dirPath of sortedDirs) {
+    const childCount = dirChildCount.get(dirPath);
+    if (childCount === 0) {
+      emptyDirs.add(dirPath);
+      // Propagate: decrement parent's tracked child count since this child is empty
+      const parentDir = dirPath.includes("/")
+        ? dirPath.slice(0, dirPath.lastIndexOf("/"))
+        : null;
+      if (parentDir && dirChildCount.has(parentDir)) {
+        dirChildCount.set(parentDir, dirChildCount.get(parentDir) - 1);
+      }
+    }
+  }
+
+  for (const dirPath of emptyDirs) {
+    const stat = dirStats.get(dirPath);
+    result[dirPath] = {
+      localPath: dirPath,
+      isFolder: true,
+      size: 0,
+      md5: null,
+      modifiedTime: stat ? new Date(stat.mtimeMs).toISOString() : new Date().toISOString(),
+    };
   }
 
   // Persist updated cache
@@ -158,6 +219,7 @@ export function buildSnapshot(remoteFiles, localFiles, message = "") {
       mimeType: file.mimeType || "",
       modifiedTime: file.modifiedTime ?? null,
       localPath: file.path,
+      ...(file.isFolder ? { isFolder: true } : {}),
     };
   }
 

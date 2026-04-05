@@ -302,6 +302,10 @@ function buildRemoteFiles(folders, rawFiles, rootFolderId = null) {
   const resolve = createFolderResolver(folders, rootFolderId);
   const isOrphaned = createOrphanChecker(folders);
   const files = [];
+
+  // Track which folders have children (files or subfolders)
+  const foldersWithChildren = new Set();
+
   for (const file of rawFiles) {
     const parentId = file.parents?.[0] || "";
 
@@ -311,6 +315,9 @@ function buildRemoteFiles(folders, rawFiles, rootFolderId = null) {
     const parentPath = parentId === rootFolderId ? "" : resolve(parentId);
 
     if (rootFolderId && parentPath === null) continue;
+
+    // Mark parent as having children
+    if (parentId) foldersWithChildren.add(parentId);
 
     files.push({
       id: file.id,
@@ -322,6 +329,34 @@ function buildRemoteFiles(folders, rawFiles, rootFolderId = null) {
       md5Checksum: file.md5Checksum || null,
     });
   }
+
+  // Mark folders that have subfolders as children
+  for (const folder of folders.values()) {
+    const parentId = folder.parents?.[0] || "";
+    if (parentId) foldersWithChildren.add(parentId);
+  }
+
+  // Include empty folders (no file children AND no subfolder children)
+  for (const folder of folders.values()) {
+    if (foldersWithChildren.has(folder.id)) continue;
+    if (isOrphaned(folder.id)) continue;
+
+    const folderPath = resolve(folder.id);
+    if (rootFolderId && folderPath === null) continue;
+    if (!folderPath) continue; // skip root-level marker
+
+    files.push({
+      id: folder.id,
+      name: folder.name,
+      path: folderPath,
+      mimeType: FOLDER_MIME,
+      size: null,
+      modifiedTime: folder.modifiedTime || null,
+      md5Checksum: null,
+      isFolder: true,
+    });
+  }
+
   return files;
 }
 

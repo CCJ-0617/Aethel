@@ -19,6 +19,11 @@ function changeToEntry(change) {
     entry.remotePath = change.remoteMeta.path;
   }
 
+  // Propagate folder flag so sync knows to create folder instead of uploading file
+  if (change.localMeta?.isFolder || change.remoteMeta?.isFolder) {
+    entry.isFolder = true;
+  }
+
   return entry;
 }
 

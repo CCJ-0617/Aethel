@@ -87,6 +87,11 @@ function buildDiffResult(changes) {
 }
 
 function remoteChanged(snapshotEntry, remoteEntry) {
+  // Folders don't change — only their existence matters
+  if (remoteEntry.isFolder || remoteEntry.mimeType === "application/vnd.google-apps.folder") {
+    return false;
+  }
+
   if (isWorkspaceType(remoteEntry.mimeType || "")) {
     return snapshotEntry.modifiedTime !== remoteEntry.modifiedTime;
   }
@@ -95,6 +100,8 @@ function remoteChanged(snapshotEntry, remoteEntry) {
 }
 
 function localChanged(snapshotEntry, localEntry) {
+  // Folders don't change — only their existence matters
+  if (localEntry.isFolder) return false;
   return snapshotEntry.md5 !== localEntry.md5;
 }
 
@@ -153,6 +160,21 @@ function promoteConflicts(changes) {
  * @param {object} localFiles
  * @param {{ root?: string, respectIgnore?: boolean }} options
  */
+/**
+ * Collect all implicit folder paths from a set of file paths.
+ * e.g. "a/b/c.txt" → {"a", "a/b"}
+ */
+function collectFolderPaths(filePaths) {
+  const folders = new Set();
+  for (const p of filePaths) {
+    const parts = p.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      folders.add(parts.slice(0, i).join("/"));
+    }
+  }
+  return folders;
+}
+
 export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIgnore = true } = {}) {
   const ignoreRules = root && respectIgnore ? loadIgnoreRules(root) : null;
 
@@ -164,6 +186,19 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   const snapshotFiles = snapshot?.files || {};
   const snapshotLocalFiles = snapshot?.localFiles || {};
 
+  // Build sets of all folder paths that implicitly exist on each side
+  // (from parent directories of files), so we can skip redundant folder additions.
+  const remoteFolderPaths = collectFolderPaths(remoteFiles.map((f) => f.path));
+  const localFolderPaths = collectFolderPaths(Object.keys(localFiles));
+
+  // Also include explicit folder entries
+  for (const f of remoteFiles) {
+    if (f.isFolder) remoteFolderPaths.add(f.path);
+  }
+  for (const [p, meta] of Object.entries(localFiles)) {
+    if (meta.isFolder) localFolderPaths.add(p);
+  }
+
   // Build remote lookup and detect additions/modifications in one pass
   const remoteById = new Map();
   for (const remoteFile of remoteFiles) {
@@ -171,6 +206,10 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
     const snapshotEntry = snapshotFiles[remoteFile.id];
 
     if (!snapshotEntry) {
+      // Skip remote folder if it already exists locally (as parent or explicit dir)
+      if (remoteFile.isFolder && localFolderPaths.has(remoteFile.path)) {
+        continue;
+      }
       changes.push(
         createChange({
           changeType: ChangeType.REMOTE_ADDED,
@@ -199,6 +238,11 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   for (const fileId of Object.keys(snapshotFiles)) {
     if (!remoteById.has(fileId)) {
       const snapshotEntry = snapshotFiles[fileId];
+      // Skip folder deletion if the folder still implicitly exists on Drive
+      // (e.g. it became non-empty, or was recreated with a different ID)
+      if (snapshotEntry.isFolder && remoteFolderPaths.has(snapshotEntry.path || snapshotEntry.localPath || "")) {
+        continue;
+      }
       changes.push(
         createChange({
           changeType: ChangeType.REMOTE_DELETED,
@@ -214,6 +258,10 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
     const snapshotEntry = snapshotLocalFiles[relativePath];
 
     if (!snapshotEntry) {
+      // Skip local folder if it already exists on Drive (as parent or explicit dir)
+      if (localMeta.isFolder && remoteFolderPaths.has(relativePath)) {
+        continue;
+      }
       changes.push(
         createChange({
           changeType: ChangeType.LOCAL_ADDED,
@@ -238,6 +286,10 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
 
   for (const [relativePath, snapshotEntry] of Object.entries(snapshotLocalFiles)) {
     if (!(relativePath in localFiles)) {
+      // Skip folder deletion if the folder still implicitly exists locally
+      if (snapshotEntry.isFolder && localFolderPaths.has(relativePath)) {
+        continue;
+      }
       changes.push(
         createChange({
           changeType: ChangeType.LOCAL_DELETED,

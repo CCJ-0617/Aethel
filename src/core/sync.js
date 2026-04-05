@@ -20,6 +20,7 @@ export class CommitResult {
     this.uploaded = 0;
     this.deletedLocal = 0;
     this.deletedRemote = 0;
+    this.foldersCreated = 0;
     this.errors = [];
   }
 
@@ -28,7 +29,8 @@ export class CommitResult {
       this.downloaded +
       this.uploaded +
       this.deletedLocal +
-      this.deletedRemote
+      this.deletedRemote +
+      this.foldersCreated
     );
   }
 
@@ -40,6 +42,9 @@ export class CommitResult {
     }
     if (this.uploaded) {
       parts.push(`${this.uploaded} uploaded`);
+    }
+    if (this.foldersCreated) {
+      parts.push(`${this.foldersCreated} folders created`);
     }
     if (this.deletedLocal) {
       parts.push(`${this.deletedLocal} deleted locally`);
@@ -56,9 +61,16 @@ export class CommitResult {
 }
 
 async function downloadStagedFile(drive, entry, root) {
-  const fileId = entry.fileId;
   const localRelativePath = entry.localPath || entry.path;
   const localAbsolutePath = toLocalAbsolutePath(root, localRelativePath);
+
+  // Empty folder: just create the directory locally
+  if (entry.isFolder) {
+    fs.mkdirSync(localAbsolutePath, { recursive: true });
+    return;
+  }
+
+  const fileId = entry.fileId;
   const response = await drive.files.get({
     fileId,
     fields: "id,name,mimeType",
@@ -69,8 +81,15 @@ async function downloadStagedFile(drive, entry, root) {
 
 async function uploadStagedFile(drive, entry, root, driveFolderId) {
   const localRelativePath = entry.localPath || entry.path;
-  const localAbsolutePath = toLocalAbsolutePath(root, localRelativePath);
   const remotePath = entry.remotePath || entry.path;
+
+  // Empty folder: just ensure it exists on Drive
+  if (entry.isFolder) {
+    await ensureFolder(drive, remotePath, driveFolderId);
+    return;
+  }
+
+  const localAbsolutePath = toLocalAbsolutePath(root, localRelativePath);
 
   if (!fs.existsSync(localAbsolutePath)) {
     throw new Error(`Local file not found: ${localAbsolutePath}`);
@@ -97,18 +116,25 @@ async function deleteLocalFile(entry, root) {
     return;
   }
 
-  await fs.promises.unlink(localAbsolutePath);
+  // Empty folder: remove the directory itself
+  if (entry.isFolder) {
+    await fs.promises.rmdir(localAbsolutePath).catch(() => {});
+  } else {
+    await fs.promises.unlink(localAbsolutePath);
+  }
 
-  let currentPath = path.dirname(localAbsolutePath);
+  // Clean up empty parent directories up to workspace root
+  let currentPath = entry.isFolder ? localAbsolutePath : path.dirname(localAbsolutePath);
   const resolvedRoot = path.resolve(root);
 
   while (currentPath !== resolvedRoot) {
-    const contents = await fs.promises.readdir(currentPath);
-    if (contents.length > 0) {
+    try {
+      const contents = await fs.promises.readdir(currentPath);
+      if (contents.length > 0) break;
+      await fs.promises.rmdir(currentPath);
+    } catch {
       break;
     }
-
-    await fs.promises.rmdir(currentPath);
     currentPath = path.dirname(currentPath);
   }
 }
@@ -195,10 +221,12 @@ export async function executeStaged(drive, root, progress) {
       const action = entry.action;
       if (action === "download") {
         await downloadStagedFile(drive, entry, root);
-        result.downloaded++;
+        if (entry.isFolder) result.foldersCreated++;
+        else result.downloaded++;
       } else if (action === "upload") {
         await uploadStagedFile(drive, entry, root, driveFolderId);
-        result.uploaded++;
+        if (entry.isFolder) result.foldersCreated++;
+        else result.uploaded++;
       } else if (action === "delete_remote") {
         await deleteRemoteFile(drive, entry);
         result.deletedRemote++;
