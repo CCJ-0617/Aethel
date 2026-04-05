@@ -685,6 +685,24 @@ export async function getAccountInfo(drive) {
   };
 }
 
+export async function listRootFolders(drive) {
+  const items = [];
+  let pageToken = null;
+
+  do {
+    const response = await drive.files.list({
+      q: `'root' in parents and mimeType = '${FOLDER_MIME}' and trashed = false`,
+      fields: "nextPageToken, files(id, name, modifiedTime)",
+      pageSize: PAGE_SIZE,
+      pageToken,
+    });
+    items.push(...(response.data.files || []));
+    pageToken = response.data.nextPageToken;
+  } while (pageToken);
+
+  return items.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function listAccessibleFiles(drive, includeSharedDrives = false) {
   const richFields =
     "nextPageToken, files(id, name, mimeType, size, modifiedTime, parents, ownedByMe, shared, driveId, owners(displayName,emailAddress), capabilities(canAddChildren,canEdit,canTrash,canDelete,canRename))";

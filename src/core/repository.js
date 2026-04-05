@@ -26,6 +26,7 @@ import {
   getAccountInfo,
   getRemoteState,
   listAccessibleFiles,
+  listRootFolders,
   syncLocalDirectoryToParent,
   uploadLocalEntry,
   withDriveRetry,
@@ -200,6 +201,10 @@ export class Repository {
   }
 
   // ── File browser (TUI) ─────────────────────────────────────────────
+
+  async listRootFolders() {
+    return listRootFolders(this.drive);
+  }
 
   async listRemoteFiles({ includeSharedDrives = false } = {}) {
     return listAccessibleFiles(this.drive, includeSharedDrives);
