@@ -263,11 +263,11 @@ export async function getAuthClient(credentialsPath, tokenPath) {
 
   try {
     return await _authPromise;
-  } catch {
+  } catch (error) {
     // Clear the cache on failure so the next call retries.
     _authPromise = null;
     _authKey = null;
-    throw arguments[0];
+    throw error;
   }
 }
 

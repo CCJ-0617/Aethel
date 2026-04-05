@@ -1058,6 +1058,8 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`Error: ${error.message}`);
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error ?? "Unknown error");
+  console.error(`Error: ${message}`);
   process.exitCode = 1;
 });
