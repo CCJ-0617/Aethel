@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.5 (2026-04-05)
+
+- Fix Node.js v25 Proxy invariant violation in withDriveRetry
+
 ## 0.2.4 (2026-04-05)
 
 - Fix npm publish authentication in CI workflow
