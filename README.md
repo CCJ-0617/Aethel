@@ -31,6 +31,21 @@ npm run install:cli   # symlinks `aethel` into ~/.local/bin
 - local secrets such as `credentials.json` and `token.json` are excluded from Git and npm publish
 - release validation runs with `npm test` and `npm run pack:check`
 
+## GitHub Automation
+
+- `CI`: runs `npm ci`, `npm test`, and `npm run pack:check` on every push and pull request across Node.js 18, 20, and 22
+- `Release`: publishes to npm with trusted publishing when a GitHub Release is published or when the workflow is triggered manually
+- `Dependabot`: opens weekly dependency update PRs for npm packages and GitHub Actions
+
+To enable npm trusted publishing, configure a trusted publisher for package `aethel` on npm with:
+
+- provider: GitHub Actions
+- owner: `CCJ-0617`
+- repository: `Aethel`
+- workflow filename: `release.yml`
+
+After trusted publishing works once, disable token-based publishing in npm package settings and revoke any old npm automation tokens.
+
 ## Google Cloud Setup
 
 1. Create a project in the [Google Cloud Console](https://console.cloud.google.com/).
