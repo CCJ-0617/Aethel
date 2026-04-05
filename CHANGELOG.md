@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 (2026-04-05)
+
+- Improve setup SOP: default credentials to ~/.config/aethel/ with guided error message
+
 ## 0.3.0 (2026-04-05)
 
 - Refactor to Repository pattern; add TUI command system with catalog, CLI runner, and tests
