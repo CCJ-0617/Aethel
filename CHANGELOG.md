@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3 (2026-04-05)
+
+- Persist credentials to ~/.config/aethel/ after auth for seamless init
+
 ## 0.3.2 (2026-04-05)
 
 - Add --version flag, interactive init folder selection, and release script
