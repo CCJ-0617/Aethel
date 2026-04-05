@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.4 (2026-04-05)
+
+- Add empty folder sync support between local and Google Drive
+
 ## 0.3.3 (2026-04-05)
 
 - Persist credentials to ~/.config/aethel/ after auth for seamless init
