@@ -1,8 +1,25 @@
 #!/usr/bin/env node
 
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import readline from "node:readline/promises";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8"));
+
+function getGitHash() {
+  try {
+    return execSync("git rev-parse --short HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch {
+    return null;
+  }
+}
+
+const gitHash = getGitHash();
+const versionString = gitHash ? `${pkg.version} (${gitHash})` : pkg.version;
 import { resolveCredentialsPath, resolveTokenPath } from "./core/auth.js";
 import {
   initWorkspace,
@@ -145,26 +162,59 @@ async function handleClean(options) {
 
 async function handleInit(options) {
   const localPath = path.resolve(options.localPath);
+  let driveFolderId = options.driveFolder || null;
+  let driveFolderName = options.driveFolderName || null;
+
+  // Interactive folder selection when no --drive-folder is provided
+  if (!driveFolderId) {
+    const repo = await openRepo(options, { requireWorkspace: false });
+    console.log("Fetching root-level Drive folders...");
+    const folders = await repo.listRootFolders();
+
+    if (folders.length === 0) {
+      console.log("No folders found in Drive root. Syncing entire My Drive.");
+      driveFolderName = "My Drive";
+    } else {
+      console.log("\nDrive folders:");
+      console.log("  0) My Drive (entire drive)");
+      for (const [i, folder] of folders.entries()) {
+        console.log(`  ${i + 1}) ${folder.name}`);
+      }
+
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        const answer = await rl.question(`\nSelect a folder [0-${folders.length}]: `);
+        const index = Number.parseInt(answer, 10);
+
+        if (index === 0 || answer.trim() === "") {
+          driveFolderName = "My Drive";
+        } else if (index >= 1 && index <= folders.length) {
+          const selected = folders[index - 1];
+          driveFolderId = selected.id;
+          driveFolderName = selected.name;
+        } else {
+          console.log("Invalid selection. Aborting.");
+          return;
+        }
+      } finally {
+        rl.close();
+      }
+    }
+  }
 
   if (!fs.existsSync(localPath)) {
     await fs.promises.mkdir(localPath, { recursive: true });
   }
 
-  const root = initWorkspace(
-    localPath,
-    options.driveFolder || null,
-    options.driveFolderName || "My Drive"
-  );
+  const root = initWorkspace(localPath, driveFolderId, driveFolderName || "My Drive");
 
   const created = createDefaultIgnoreFile(root);
-  console.log(`Initialised Aethel workspace at ${root}`);
+  console.log(`\nInitialised Aethel workspace at ${root}`);
   if (created) {
     console.log("  Created .aethelignore with default patterns");
   }
-  if (options.driveFolder) {
-    console.log(
-      `  Drive folder: ${options.driveFolderName || "My Drive"} (${options.driveFolder})`
-    );
+  if (driveFolderId) {
+    console.log(`  Drive folder: ${driveFolderName} (${driveFolderId})`);
   } else {
     console.log("  Syncing entire My Drive");
   }
@@ -816,6 +866,7 @@ async function main() {
 
   program
     .name("aethel")
+    .version(versionString, "-v, --version")
     .description("Git-like Google Drive sync management and cleanup")
     .showHelpAfterError();
 
@@ -835,13 +886,14 @@ async function main() {
       .option("--confirm <phrase>", "Confirmation phrase required for --execute", "")
   ).action(handleClean);
 
-  program
-    .command("init")
-    .description("Initialise a sync workspace")
-    .option("--local-path <path>", "Local directory to sync", ".")
-    .option("--drive-folder <id>", "Drive folder ID to sync")
-    .option("--drive-folder-name <name>", "Display name for the Drive folder")
-    .action(handleInit);
+  addAuthOptions(
+    program
+      .command("init")
+      .description("Initialise a sync workspace")
+      .option("--local-path <path>", "Local directory to sync", ".")
+      .option("--drive-folder <id>", "Drive folder ID to sync (omit for interactive selection)")
+      .option("--drive-folder-name <name>", "Display name for the Drive folder")
+  ).action(handleInit);
 
   addAuthOptions(program.command("status").description("Show sync status")).action(
     handleStatus

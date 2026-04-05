@@ -37,6 +37,7 @@
     "auth": "node src/cli.js auth",
     "clean": "node src/cli.js clean",
     "install:cli": "bash scripts/install.sh",
+    "release": "bash scripts/release.sh",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm test && npm run pack:check",
     "test": "node --test",
