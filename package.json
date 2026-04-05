@@ -45,7 +45,7 @@
   "dependencies": {
     "chalk": "^5.3.0",
     "commander": "^14.0.3",
-    "googleapis": "^140.0.1",
+    "googleapis": "^171.4.0",
     "ignore": "^7.0.5",
     "ink": "^6.8.0",
     "ink-select-input": "^6.0.0",
