@@ -71,11 +71,8 @@ export function withDriveRetry(drive) {
       return (...args) => withRetry(() => value.apply(target, args));
     },
   });
-  return new Proxy(drive, {
-    get(target, prop, receiver) {
-      if (prop === "files") return filesProxy;
-      return Reflect.get(target, prop, receiver);
-    },
+  return Object.create(drive, {
+    files: { value: filesProxy, configurable: true, enumerable: true },
   });
 }
 
