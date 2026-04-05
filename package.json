@@ -47,7 +47,7 @@
     "commander": "^12.1.0",
     "googleapis": "^140.0.1",
     "ignore": "^7.0.5",
-    "ink": "^5.1.0",
+    "ink": "^6.8.0",
     "ink-select-input": "^6.0.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
