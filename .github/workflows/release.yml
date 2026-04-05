@@ -1,19 +1,29 @@
-name: Release
+name: Publish (manual)
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Publish target"
+        required: true
+        type: choice
+        options:
+          - both
+          - npm
+          - github-packages
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  test:
+  publish:
     runs-on: ubuntu-latest
+    environment: npm
     permissions:
       contents: read
+      packages: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -33,63 +43,30 @@ jobs:
       - name: Verify package contents
         run: npm run pack:check
 
-  publish-npm:
-    needs: test
-    runs-on: ubuntu-latest
-    environment: npm
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
+      # ── npm ──
+      - name: Setup npm registry
+        if: inputs.target == 'npm' || inputs.target == 'both'
         uses: actions/setup-node@v6
         with:
           node-version: lts/*
           registry-url: https://registry.npmjs.org
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check version matches tag
-        if: github.event_name == 'release'
-        run: |
-          PKG_VERSION="v$(node -p 'require("./package.json").version')"
-          TAG="${{ github.event.release.tag_name }}"
-          if [ "$PKG_VERSION" != "$TAG" ]; then
-            echo "::error::package.json version ($PKG_VERSION) does not match release tag ($TAG)"
-            exit 1
-          fi
 
       - name: Publish to npm
+        if: inputs.target == 'npm' || inputs.target == 'both'
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  publish-ghp:
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
+      # ── GitHub Packages ──
+      - name: Setup GitHub Packages registry
+        if: inputs.target == 'github-packages' || inputs.target == 'both'
         uses: actions/setup-node@v6
         with:
           node-version: lts/*
           registry-url: https://npm.pkg.github.com
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
 
       - name: Scope package for GitHub Packages
+        if: inputs.target == 'github-packages' || inputs.target == 'both'
         run: |
           node -e "
             const pkg = require('./package.json');
@@ -99,6 +76,7 @@ jobs:
           "
 
       - name: Publish to GitHub Packages
+        if: inputs.target == 'github-packages' || inputs.target == 'both'
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
