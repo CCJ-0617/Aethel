@@ -33,14 +33,38 @@ npm run install:cli   # symlinks `aethel` into ~/.local/bin
 
 ## Setup
 
-1. Create a project in the [Google Cloud Console](https://console.cloud.google.com/)
-2. Enable the **Google Drive API**
-3. Create an **OAuth 2.0 Client ID** (Desktop application)
-4. Download the credentials JSON and save it as `credentials.json` in your project root
+### 1. Get Google OAuth Credentials
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a project (or select an existing one)
+3. Enable the **Google Drive API** (APIs & Services → Library)
+4. Go to **APIs & Services → Credentials**
+5. Click **Create Credentials → OAuth 2.0 Client ID**
+6. Application type: **Desktop application**
+7. Download the JSON file
+
+### 2. Save Credentials
+
+Save the downloaded JSON as `~/.config/aethel/credentials.json`:
+
+```bash
+mkdir -p ~/.config/aethel
+mv ~/Downloads/client_secret_*.json ~/.config/aethel/credentials.json
+```
+
+You can also place `credentials.json` in the current directory, or pass a custom path with `--credentials`.
+
+### 3. Authenticate
 
 ```bash
 aethel auth                    # opens browser, saves token.json
-aethel init --local-path ./workspace --drive-folder <folder-id>
+```
+
+### 4. Initialize a Workspace
+
+```bash
+aethel init --local-path ./my-drive     # sync entire My Drive
+aethel init --local-path ./workspace --drive-folder <folder-id>  # sync specific folder
 ```
 
 > `credentials.json` and `token.json` are local secrets — never commit them.
@@ -143,8 +167,8 @@ build/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GOOGLE_DRIVE_CREDENTIALS_PATH` | `credentials.json` | Path to OAuth credentials |
-| `GOOGLE_DRIVE_TOKEN_PATH` | `token.json` | Path to cached OAuth token |
+| `GOOGLE_DRIVE_CREDENTIALS_PATH` | `~/.config/aethel/credentials.json` | Path to OAuth credentials |
+| `GOOGLE_DRIVE_TOKEN_PATH` | `~/.config/aethel/token.json` | Path to cached OAuth token |
 | `AETHEL_DRIVE_CONCURRENCY` | `40` | Max concurrent Drive API requests |
 
 ## Architecture
