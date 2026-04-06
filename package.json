@@ -27,6 +27,9 @@
   "files": [
     "src/",
     "scripts/demo.js",
+    "scripts/render-demo-gif.py",
+    "scripts/render-demo-screenshot.js",
+    "docs/demo.gif",
     "docs/demo-screenshot.svg",
     "LICENSE",
     "README.md",
@@ -36,7 +39,11 @@
   ],
   "scripts": {
     "demo": "node scripts/demo.js",
+    "demo:gif": "python3 scripts/render-demo-gif.py",
     "demo:screenshot": "node scripts/render-demo-screenshot.js",
+    "demo:setup": "python3 scripts/generate-cast.py && agg docs/setup.cast docs/setup.gif --font-size 32 --theme dracula",
+    "demo:init": "python3 scripts/generate-init-cast.py && agg docs/init.cast docs/init.gif --font-size 32 --theme dracula",
+    "demo:usage": "python3 scripts/generate-usage-cast.py && agg docs/usage.cast docs/usage.gif --font-size 32 --theme dracula",
     "start": "node src/cli.js",
     "auth": "node src/cli.js auth",
     "clean": "node src/cli.js clean",

@@ -9,8 +9,6 @@
 
 Aethel brings a `snapshot → diff → stage → commit` workflow to Google Drive. Track changes on both sides, resolve conflicts explicitly, and keep a full sync history — all without leaving the command line. It also ships with a dual-pane TUI for hands-on file management.
 
----
-
 ## Install
 
 ```bash
@@ -32,6 +30,8 @@ npm run install:cli   # symlinks `aethel` into ~/.local/bin
 **Requires Node.js >= 18**
 
 ## Setup
+
+![Aethel setup flow](docs/setup.gif)
 
 ### 1. Get Google OAuth Credentials
 
@@ -62,6 +62,8 @@ aethel auth                    # opens browser, saves token.json
 
 ### 4. Initialize a Workspace
 
+![Aethel init flow](docs/init.gif)
+
 ```bash
 aethel init --local-path ./my-drive     # sync entire My Drive
 aethel init --local-path ./workspace --drive-folder <folder-id>  # sync specific folder
@@ -70,36 +72,9 @@ aethel pull --all -m "initial pull"     # hydrate local files from the current r
 
 > `credentials.json` and `token.json` are local secrets — never commit them.
 
-## Demo
+## Usage
 
-```bash
-npm install
-npm run demo
-npm run demo:screenshot
-```
-
-Runs a fully local walkthrough against a fake Google Drive backend, so no OAuth setup is required.
-
-The demo covers:
-
-- remote modification: `docs/spec.txt`
-- remote addition: `design/roadmap.txt`
-- local modification: `notes/ideas.txt`
-- local addition: `drafts/todo.txt`
-- full sync flow: `status → diff → add --all → commit`
-
-Useful commands:
-
-```bash
-npm run demo                               # run the transcript
-node scripts/demo.js --redact-workspace    # stable output for docs or copy/paste
-npm run demo:screenshot                    # regenerate docs/demo-screenshot.svg
-```
-
-![Aethel demo screenshot](docs/demo-screenshot.svg)
-
-
-### Usage
+![Aethel usage flow](docs/usage.gif)
 
 ```bash
 aethel status                  # local vs remote changes at a glance

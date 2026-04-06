@@ -20,14 +20,14 @@ const { workspace, lines } = await generateDemoTranscript({ redactWorkspace: tru
 
 try {
   const longest = lines.reduce((max, line) => Math.max(max, line.length), 0);
-  const charWidth = 9.2;
-  const lineHeight = 28;
-  const width = Math.max(980, Math.ceil(longest * charWidth) + 120);
-  const height = lines.length * lineHeight + 140;
+  const charWidth = 12.4;
+  const lineHeight = 32;
+  const width = Math.max(1120, Math.ceil(longest * charWidth) + 160);
+  const height = lines.length * lineHeight + 168;
   const text = lines
     .map(
       (line, index) =>
-        `<text x="54" y="${86 + index * lineHeight}" xml:space="preserve">${escapeXml(line)}</text>`
+        `<text x="64" y="${100 + index * lineHeight}" xml:space="preserve">${escapeXml(line)}</text>`
     )
     .join("\n");
 
@@ -44,14 +44,14 @@ try {
 <stop offset="100%" stop-color="#f59e0b"/>
 </linearGradient>
 </defs>
-<rect width="${width}" height="${height}" rx="24" fill="url(#bg)"/>
-<rect x="22" y="22" width="${width - 44}" height="${height - 44}" rx="18" fill="#0a0f1a" stroke="#243044"/>
-<rect x="22" y="22" width="${width - 44}" height="32" rx="18" fill="#10192a"/>
-<circle cx="48" cy="38" r="6" fill="#fb7185"/>
-<circle cx="68" cy="38" r="6" fill="#f59e0b"/>
-<circle cx="88" cy="38" r="6" fill="#22c55e"/>
-<rect x="118" y="33" width="${Math.min(280, width - 180)}" height="10" rx="5" fill="url(#glow)" opacity="0.8"/>
-<g fill="#dbe4f0" font-family="SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="20">
+<rect width="${width}" height="${height}" rx="28" fill="url(#bg)"/>
+<rect x="24" y="24" width="${width - 48}" height="${height - 48}" rx="20" fill="#0a0f1a" stroke="#243044"/>
+<rect x="24" y="24" width="${width - 48}" height="36" rx="20" fill="#10192a"/>
+<circle cx="52" cy="42" r="7" fill="#fb7185"/>
+<circle cx="74" cy="42" r="7" fill="#f59e0b"/>
+<circle cx="96" cy="42" r="7" fill="#22c55e"/>
+<rect x="132" y="35" width="${Math.min(320, width - 220)}" height="12" rx="6" fill="url(#glow)" opacity="0.8"/>
+<g fill="#dbe4f0" font-family="'Times New Roman', Times, serif" font-size="22">
 ${text}
 </g>
 </svg>
