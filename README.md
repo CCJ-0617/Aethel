@@ -98,61 +98,7 @@ npm run demo:screenshot                    # regenerate docs/demo-screenshot.svg
 
 ![Aethel demo screenshot](docs/demo-screenshot.svg)
 
-Expected transcript:
-
-```text
-Aethel demo
-Workspace: /tmp/aethel-demo-XXXXXX
-Backend: fake Google Drive
-
-Scenario:
-  Drive changed docs/spec.txt and added design/roadmap.txt
-  Local changed notes/ideas.txt and added drafts/todo.txt
-
-$ aethel status
-Remote changes (2):
-  MR docs/spec.txt  (modified on Drive)
-  +R design/roadmap.txt  (new on Drive)
-Local changes (2):
-  +L drafts/todo.txt  (new locally)
-  ML notes/ideas.txt  (modified locally)
-
-$ aethel diff --side all
-Remote changes:
-  MR docs/spec.txt
-       modified on Drive
-  +R design/roadmap.txt
-       new on Drive
-Local changes:
-  +L drafts/todo.txt
-       new locally
-  ML notes/ideas.txt
-       modified locally
-
-$ aethel add --all
-Staged 4 change(s).
-
-$ aethel status
-Staged changes (4):
-         download  docs/spec.txt
-         download  design/roadmap.txt
-           upload  drafts/todo.txt
-           upload  notes/ideas.txt
-Remote changes (2):
-  MR docs/spec.txt  (modified on Drive)
-  +R design/roadmap.txt  (new on Drive)
-Local changes (2):
-  +L drafts/todo.txt  (new locally)
-  ML notes/ideas.txt  (modified locally)
-
-$ aethel commit -m "demo sync"
-Commit complete: 2 downloaded, 2 uploaded
-
-$ aethel status
-Everything up to date.
-```
-
-## Usage
+Usage
 
 ```bash
 aethel status                  # local vs remote changes at a glance
@@ -190,28 +136,29 @@ Processes deepest-first for single-pass convergence, caches child state to minim
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `auth` | OAuth flow — creates `token.json`, verifies Drive access |
-| `init` | Initialize a local sync workspace |
-| `status` | Show local vs remote changes |
-| `diff` | Detailed file differences |
-| `add` | Stage changes |
-| `reset` | Unstage changes |
-| `commit` | Execute staged sync operations |
-| `pull` | Fetch and apply remote changes (`--all` for full remote download) |
-| `push` | Push local changes to Drive |
-| `log` | Sync history |
-| `fetch` | Refresh remote state without applying |
-| `resolve` | Resolve conflicts (local / remote / both) |
-| `ignore` | Manage `.aethelignore` patterns |
-| `show` | Inspect a saved snapshot |
-| `restore` | Restore files from the last snapshot |
-| `rm` | Remove local files and stage remote deletion |
-| `mv` | Move or rename local files |
-| `clean` | List and optionally trash/delete Drive files |
-| `dedupe-folders` | Detect and merge duplicate remote folders |
-| `tui` | Launch interactive terminal UI |
+
+| Command          | Description                                                       |
+| ---------------- | ----------------------------------------------------------------- |
+| `auth`           | OAuth flow — creates`token.json`, verifies Drive access          |
+| `init`           | Initialize a local sync workspace                                 |
+| `status`         | Show local vs remote changes                                      |
+| `diff`           | Detailed file differences                                         |
+| `add`            | Stage changes                                                     |
+| `reset`          | Unstage changes                                                   |
+| `commit`         | Execute staged sync operations                                    |
+| `pull`           | Fetch and apply remote changes (`--all` for full remote download) |
+| `push`           | Push local changes to Drive                                       |
+| `log`            | Sync history                                                      |
+| `fetch`          | Refresh remote state without applying                             |
+| `resolve`        | Resolve conflicts (local / remote / both)                         |
+| `ignore`         | Manage`.aethelignore` patterns                                    |
+| `show`           | Inspect a saved snapshot                                          |
+| `restore`        | Restore files from the last snapshot                              |
+| `rm`             | Remove local files and stage remote deletion                      |
+| `mv`             | Move or rename local files                                        |
+| `clean`          | List and optionally trash/delete Drive files                      |
+| `dedupe-folders` | Detect and merge duplicate remote folders                         |
+| `tui`            | Launch interactive terminal UI                                    |
 
 ## TUI
 
@@ -221,20 +168,21 @@ aethel tui
 
 Dual-pane file browser — local filesystem on the left, Google Drive on the right.
 
-| Key | Action |
-|-----|--------|
-| `Tab` | Switch panes |
-| `Left` / `Right` | Navigate up / into directories |
-| `u` | Upload selected local file or folder to Drive |
-| `s` | Batch sync local folder to current Drive directory |
-| `U` | Upload from a manually entered path |
-| `n` | Rename selected local item |
-| `x` | Delete selected local item |
-| `Space` | Toggle selection in Drive pane |
-| `t` / `d` | Trash / permanently delete selected Drive items |
-| `/` | Filter by name |
-| `f` | Open the commands page and choose a TUI action |
-| `:` | Run any Aethel CLI command inside the TUI |
+
+| Key              | Action                                             |
+| ---------------- | -------------------------------------------------- |
+| `Tab`            | Switch panes                                       |
+| `Left` / `Right` | Navigate up / into directories                     |
+| `u`              | Upload selected local file or folder to Drive      |
+| `s`              | Batch sync local folder to current Drive directory |
+| `U`              | Upload from a manually entered path                |
+| `n`              | Rename selected local item                         |
+| `x`              | Delete selected local item                         |
+| `Space`          | Toggle selection in Drive pane                     |
+| `t` / `d`        | Trash / permanently delete selected Drive items    |
+| `/`              | Filter by name                                     |
+| `f`              | Open the commands page and choose a TUI action     |
+| `:`              | Run any Aethel CLI command inside the TUI          |
 
 ## Ignore Patterns
 
@@ -251,11 +199,12 @@ build/
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GOOGLE_DRIVE_CREDENTIALS_PATH` | `~/.config/aethel/credentials.json` | Path to OAuth credentials |
-| `GOOGLE_DRIVE_TOKEN_PATH` | `~/.config/aethel/token.json` | Path to cached OAuth token |
-| `AETHEL_DRIVE_CONCURRENCY` | `40` | Max concurrent Drive API requests |
+
+| Variable                        | Default                             | Description                       |
+| ------------------------------- | ----------------------------------- | --------------------------------- |
+| `GOOGLE_DRIVE_CREDENTIALS_PATH` | `~/.config/aethel/credentials.json` | Path to OAuth credentials         |
+| `GOOGLE_DRIVE_TOKEN_PATH`       | `~/.config/aethel/token.json`       | Path to cached OAuth token        |
+| `AETHEL_DRIVE_CONCURRENCY`      | `40`                                | Max concurrent Drive API requests |
 
 ## Architecture
 
