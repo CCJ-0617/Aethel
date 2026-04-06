@@ -65,6 +65,7 @@ aethel auth                    # opens browser, saves token.json
 ```bash
 aethel init --local-path ./my-drive     # sync entire My Drive
 aethel init --local-path ./workspace --drive-folder <folder-id>  # sync specific folder
+aethel pull --all -m "initial pull"     # hydrate local files from the current remote tree
 ```
 
 > `credentials.json` and `token.json` are local secrets — never commit them.
@@ -81,6 +82,8 @@ aethel pull -m "pull"          # fetch remote changes and apply
 aethel pull --all              # download the full remote tree to local
 aethel push -m "push"          # push local changes to Drive
 ```
+
+`pull` applies remote changes relative to the latest snapshot. Use `pull --all` for the first full download or to rehydrate a local workspace from the current remote tree.
 
 ### Conflict Resolution
 
@@ -114,7 +117,7 @@ Processes deepest-first for single-pass convergence, caches child state to minim
 | `add` | Stage changes |
 | `reset` | Unstage changes |
 | `commit` | Execute staged sync operations |
-| `pull` | Fetch and apply remote changes |
+| `pull` | Fetch and apply remote changes (`--all` for full remote download) |
 | `push` | Push local changes to Drive |
 | `log` | Sync history |
 | `fetch` | Refresh remote state without applying |
