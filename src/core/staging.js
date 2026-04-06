@@ -50,6 +50,26 @@ export function stageChanges(root, changes) {
   return changes.length;
 }
 
+export function stageRemoteFilesForDownload(root, remoteFiles) {
+  const index = readIndex(root);
+  const byPath = new Map((index.staged || []).map((entry) => [entry.path, entry]));
+
+  for (const remoteFile of remoteFiles) {
+    byPath.set(remoteFile.path, {
+      action: "download",
+      path: remoteFile.path,
+      localPath: remoteFile.path,
+      fileId: remoteFile.id,
+      remotePath: remoteFile.path,
+      ...(remoteFile.isFolder ? { isFolder: true } : {}),
+    });
+  }
+
+  index.staged = [...byPath.values()];
+  writeIndex(root, index);
+  return remoteFiles.length;
+}
+
 export function unstagePath(root, targetPath) {
   const index = readIndex(root);
   const staged = index.staged || [];

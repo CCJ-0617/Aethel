@@ -123,6 +123,38 @@ test("stageChanges stages multiple and returns count", () => {
   }
 });
 
+test("stageRemoteFilesForDownload stages full remote downloads", () => {
+  const root = makeTmpWorkspace();
+  try {
+    const repo = new Repository(root);
+    const count = repo.stageRemoteFilesForDownload([
+      { id: "file-1", path: "docs/spec.txt" },
+      { id: "folder-1", path: "empty-dir", isFolder: true },
+    ]);
+    const staged = repo.getStagedEntries();
+    assert.equal(count, 2);
+    assert.deepEqual(staged, [
+      {
+        action: "download",
+        path: "docs/spec.txt",
+        localPath: "docs/spec.txt",
+        fileId: "file-1",
+        remotePath: "docs/spec.txt",
+      },
+      {
+        action: "download",
+        path: "empty-dir",
+        localPath: "empty-dir",
+        fileId: "folder-1",
+        remotePath: "empty-dir",
+        isFolder: true,
+      },
+    ]);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test("unstagePath removes a staged entry", () => {
   const root = makeTmpWorkspace();
   try {

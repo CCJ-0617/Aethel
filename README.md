@@ -78,6 +78,7 @@ aethel add --all               # stage default suggested actions
 aethel commit -m "sync"        # execute staged operations
 
 aethel pull -m "pull"          # fetch remote changes and apply
+aethel pull --all              # download the full remote tree to local
 aethel push -m "push"          # push local changes to Drive
 ```
 
