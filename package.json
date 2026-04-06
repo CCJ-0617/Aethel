@@ -26,6 +26,8 @@
   },
   "files": [
     "src/",
+    "scripts/demo.js",
+    "docs/demo-screenshot.svg",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
@@ -33,6 +35,8 @@
     ".env.example"
   ],
   "scripts": {
+    "demo": "node scripts/demo.js",
+    "demo:screenshot": "node scripts/render-demo-screenshot.js",
     "start": "node src/cli.js",
     "auth": "node src/cli.js auth",
     "clean": "node src/cli.js clean",
