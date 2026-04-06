@@ -250,23 +250,28 @@ function formatStatus(diff, staged) {
     }
   }
 
-  if (diff.remoteChanges.length) {
-    lines.push(`Remote changes (${diff.remoteChanges.length}):`);
-    for (const change of diff.remoteChanges) {
+  const stagedPaths = new Set(staged.map((e) => e.path));
+  const unstagedRemote = diff.remoteChanges.filter((c) => !stagedPaths.has(c.path));
+  const unstagedLocal = diff.localChanges.filter((c) => !stagedPaths.has(c.path));
+  const unstagedConflicts = diff.conflicts.filter((c) => !stagedPaths.has(c.path));
+
+  if (unstagedRemote.length) {
+    lines.push(`Remote changes (${unstagedRemote.length}):`);
+    for (const change of unstagedRemote) {
       lines.push(`  ${change.shortStatus} ${change.path}  (${change.description})`);
     }
   }
 
-  if (diff.localChanges.length) {
-    lines.push(`Local changes (${diff.localChanges.length}):`);
-    for (const change of diff.localChanges) {
+  if (unstagedLocal.length) {
+    lines.push(`Local changes (${unstagedLocal.length}):`);
+    for (const change of unstagedLocal) {
       lines.push(`  ${change.shortStatus} ${change.path}  (${change.description})`);
     }
   }
 
-  if (diff.conflicts.length) {
-    lines.push(`Conflicts (${diff.conflicts.length}):`);
-    for (const change of diff.conflicts) {
+  if (unstagedConflicts.length) {
+    lines.push(`Conflicts (${unstagedConflicts.length}):`);
+    for (const change of unstagedConflicts) {
       lines.push(`  ${change.shortStatus} ${change.path}  (${change.description})`);
     }
   }

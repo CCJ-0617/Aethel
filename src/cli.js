@@ -301,23 +301,28 @@ async function handleStatus(options) {
     }
   }
 
-  if (diff.remoteChanges.length) {
-    console.log(`\nRemote changes (${diff.remoteChanges.length}):`);
-    for (const change of diff.remoteChanges) {
+  const stagedPaths = new Set(staged.map((e) => e.path));
+  const unstagedRemote = diff.remoteChanges.filter((c) => !stagedPaths.has(c.path));
+  const unstagedLocal = diff.localChanges.filter((c) => !stagedPaths.has(c.path));
+  const unstagedConflicts = diff.conflicts.filter((c) => !stagedPaths.has(c.path));
+
+  if (unstagedRemote.length) {
+    console.log(`\nRemote changes (${unstagedRemote.length}):`);
+    for (const change of unstagedRemote) {
       console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
     }
   }
 
-  if (diff.localChanges.length) {
-    console.log(`\nLocal changes (${diff.localChanges.length}):`);
-    for (const change of diff.localChanges) {
+  if (unstagedLocal.length) {
+    console.log(`\nLocal changes (${unstagedLocal.length}):`);
+    for (const change of unstagedLocal) {
       console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
     }
   }
 
-  if (diff.conflicts.length) {
-    console.log(`\nConflicts (${diff.conflicts.length}):`);
-    for (const change of diff.conflicts) {
+  if (unstagedConflicts.length) {
+    console.log(`\nConflicts (${unstagedConflicts.length}):`);
+    for (const change of unstagedConflicts) {
       console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
     }
   }
