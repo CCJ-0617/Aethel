@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.8 (2026-04-06)
+
+- Fix Drive upload checksum test stub
+
 ## 0.3.7 (2026-04-05)
 
 - Fix orphan checker not recognizing My Drive root — all files under synced folders were silently dropped
