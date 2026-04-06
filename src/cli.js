@@ -97,6 +97,15 @@ async function loadStateWithProgress(repo, opts) {
   }
 }
 
+function assertInsideRoot(root, targetPath) {
+  const abs = path.resolve(root, targetPath);
+  const resolvedRoot = path.resolve(root);
+  if (!abs.startsWith(resolvedRoot + path.sep) && abs !== resolvedRoot) {
+    throw new Error(`Path traversal blocked: '${targetPath}' resolves outside workspace`);
+  }
+  return abs;
+}
+
 function matchesPattern(targetPath, pattern) {
   if (targetPath === pattern) {
     return true;
@@ -783,7 +792,7 @@ async function handleRestore(paths, options) {
       continue;
     }
 
-    const localDest = path.join(root, entry.localPath || entry.path);
+    const localDest = assertInsideRoot(root, entry.localPath || entry.path);
     const spinner = createSpinner(`Restoring ${targetPath}...`);
 
     try {
@@ -807,7 +816,7 @@ async function handleRm(paths, options) {
   const root = repo.root;
 
   for (const targetPath of paths) {
-    const localAbs = path.join(root, targetPath);
+    const localAbs = assertInsideRoot(root, targetPath);
     if (fs.existsSync(localAbs)) {
       await fs.promises.rm(localAbs, { recursive: true });
       console.log(`  Deleted locally: ${targetPath}`);
@@ -833,8 +842,8 @@ async function handleRm(paths, options) {
 async function handleMv(source, dest, options) {
   const root = requireRoot();
 
-  const srcAbs = path.join(root, source);
-  const destAbs = path.join(root, dest);
+  const srcAbs = assertInsideRoot(root, source);
+  const destAbs = assertInsideRoot(root, dest);
 
   if (!fs.existsSync(srcAbs)) {
     console.log(`Source not found: ${source}`);
@@ -846,6 +855,77 @@ async function handleMv(source, dest, options) {
   await fs.promises.rename(srcAbs, destAbs);
   console.log(`  Moved: ${source} → ${dest}`);
   console.log("  Run 'aethel status' to see the resulting changes (old path deleted, new path added).");
+}
+
+async function handleVerify(options) {
+  const checkRemote = Boolean(options.remote);
+  const repo = checkRemote
+    ? await openRepo(options)
+    : (() => { const root = requireRoot(); return new Repository(root); })();
+
+  const snapshot = repo.getSnapshot();
+  if (!snapshot) {
+    console.log("No snapshot to verify. Run 'aethel commit' first.");
+    return;
+  }
+
+  const localCount = Object.keys(snapshot.localFiles || {}).filter(
+    (k) => !snapshot.localFiles[k].isFolder
+  ).length;
+  const remoteCount = checkRemote ? Object.keys(snapshot.files || {}).length : 0;
+  const total = localCount + remoteCount;
+
+  const bar = createProgressBar("Verifying", total);
+  const result = await repo.verify({
+    checkRemote,
+    onProgress(done) { bar.update(done); },
+  });
+
+  // Snapshot integrity
+  if (result.snapshot.valid) {
+    bar.done(`Verification complete`);
+    console.log(`\n  Snapshot: ✔ ${result.snapshot.reason}`);
+  } else {
+    bar.done(`Verification found issues`);
+    console.log(`\n  Snapshot: ✖ ${result.snapshot.reason}`);
+  }
+
+  // Local issues
+  if (result.local.length) {
+    console.log(`\n  Local issues (${result.local.length}):`);
+    for (const e of result.local) {
+      if (e.status === "missing") {
+        console.log(`    ✖ ${e.path}  — file missing`);
+      } else if (e.status === "modified") {
+        console.log(`    ✖ ${e.path}  — md5 mismatch (expected ${e.expected.slice(0, 8)}, got ${e.actual.slice(0, 8)})`);
+      }
+    }
+  } else {
+    console.log(`  Local files: ✔ ${localCount} file(s) verified`);
+  }
+
+  // Remote issues
+  if (checkRemote) {
+    if (result.remote.length) {
+      console.log(`\n  Remote issues (${result.remote.length}):`);
+      for (const e of result.remote) {
+        if (e.status === "deleted_remote") {
+          console.log(`    ✖ ${e.path}  — deleted on Drive`);
+        } else if (e.status === "modified_remote") {
+          console.log(`    ✖ ${e.path}  — md5 mismatch (expected ${e.expected.slice(0, 8)}, got ${e.actual.slice(0, 8)})`);
+        }
+      }
+    } else {
+      console.log(`  Remote files: ✔ ${remoteCount} file(s) verified`);
+    }
+  }
+
+  if (result.ok) {
+    console.log("\n✔ All integrity checks passed.");
+  } else {
+    console.log("\n✖ Integrity issues detected. Run 'aethel status' to review.");
+    process.exitCode = 1;
+  }
 }
 
 async function handleTui(options) {
@@ -1079,6 +1159,13 @@ async function main() {
     .argument("<source>", "Source path (relative to workspace)")
     .argument("<dest>", "Destination path (relative to workspace)")
     .action((source, dest, options) => handleMv(source, dest, options));
+
+  addAuthOptions(
+    program
+      .command("verify")
+      .description("Verify file integrity against last snapshot")
+      .option("--remote", "Also verify remote files on Drive (requires network)")
+  ).action(handleVerify);
 
   addAuthOptions(
     program
