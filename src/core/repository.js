@@ -47,6 +47,7 @@ import {
   stageChange,
   stageChanges,
   stageConflictResolution,
+  stageRemoteFilesForDownload,
   stagedEntries,
   unstageAll,
   unstagePath,
@@ -188,6 +189,10 @@ export class Repository {
 
   stageChanges(changes) {
     return stageChanges(this._root, changes);
+  }
+
+  stageRemoteFilesForDownload(remoteFiles) {
+    return stageRemoteFilesForDownload(this._root, remoteFiles);
   }
 
   unstagePath(targetPath) {

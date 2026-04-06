@@ -513,6 +513,37 @@ async function handlePull(paths, options) {
   const repo = await openRepo(options);
   const { diff, remoteState } = await loadStateWithProgress(repo, { useCache: false });
 
+  if (options.all) {
+    let remoteFiles = remoteState.files;
+
+    if (paths && paths.length > 0) {
+      remoteFiles = remoteFiles.filter((file) =>
+        paths.some((p) => matchesPattern(file.path, p))
+      );
+    }
+
+    if (!remoteFiles.length) {
+      console.log("No remote files matched.");
+      return;
+    }
+
+    if (options.dryRun) {
+      console.log(`Would pull ${remoteFiles.length} remote item(s):`);
+      for (const file of remoteFiles) {
+        console.log(`  +R ${file.path}  (full remote download)`);
+      }
+      return;
+    }
+
+    const count = repo.stageRemoteFilesForDownload(remoteFiles);
+    console.log(`Staged ${count} remote item(s). Committing...`);
+    await handleCommit({ ...options, message: options.message || "pull" }, {
+      repo,
+      snapshotHint: { remote: remoteState },
+    });
+    return;
+  }
+
   let remoteChanges = diff.changes.filter((change) =>
     [
       ChangeType.REMOTE_ADDED,
@@ -1100,6 +1131,7 @@ async function main() {
       .command("pull")
       .description("Download remote changes")
       .argument("[paths...]", "Specific paths to pull (default: all)")
+      .option("--all", "Download all remote files regardless of snapshot state")
       .option("-m, --message <message>", "Commit message")
       .option("--force", "Force-pull conflicts (remote wins)")
       .option("--dry-run", "Preview changes without applying")
