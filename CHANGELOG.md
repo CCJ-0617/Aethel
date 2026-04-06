@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0 (2026-04-06)
+
+- Add pull --all for full remote download
+
 ## 0.3.8 (2026-04-06)
 
 - Fix Drive upload checksum test stub
