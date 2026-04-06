@@ -70,6 +70,88 @@ aethel pull --all -m "initial pull"     # hydrate local files from the current r
 
 > `credentials.json` and `token.json` are local secrets — never commit them.
 
+## Demo
+
+```bash
+npm install
+npm run demo
+npm run demo:screenshot
+```
+
+Runs a fully local walkthrough against a fake Google Drive backend, so no OAuth setup is required.
+
+The demo covers:
+
+- remote modification: `docs/spec.txt`
+- remote addition: `design/roadmap.txt`
+- local modification: `notes/ideas.txt`
+- local addition: `drafts/todo.txt`
+- full sync flow: `status → diff → add --all → commit`
+
+Useful commands:
+
+```bash
+npm run demo                               # run the transcript
+node scripts/demo.js --redact-workspace    # stable output for docs or copy/paste
+npm run demo:screenshot                    # regenerate docs/demo-screenshot.svg
+```
+
+![Aethel demo screenshot](docs/demo-screenshot.svg)
+
+Expected transcript:
+
+```text
+Aethel demo
+Workspace: /tmp/aethel-demo-XXXXXX
+Backend: fake Google Drive
+
+Scenario:
+  Drive changed docs/spec.txt and added design/roadmap.txt
+  Local changed notes/ideas.txt and added drafts/todo.txt
+
+$ aethel status
+Remote changes (2):
+  MR docs/spec.txt  (modified on Drive)
+  +R design/roadmap.txt  (new on Drive)
+Local changes (2):
+  +L drafts/todo.txt  (new locally)
+  ML notes/ideas.txt  (modified locally)
+
+$ aethel diff --side all
+Remote changes:
+  MR docs/spec.txt
+       modified on Drive
+  +R design/roadmap.txt
+       new on Drive
+Local changes:
+  +L drafts/todo.txt
+       new locally
+  ML notes/ideas.txt
+       modified locally
+
+$ aethel add --all
+Staged 4 change(s).
+
+$ aethel status
+Staged changes (4):
+         download  docs/spec.txt
+         download  design/roadmap.txt
+           upload  drafts/todo.txt
+           upload  notes/ideas.txt
+Remote changes (2):
+  MR docs/spec.txt  (modified on Drive)
+  +R design/roadmap.txt  (new on Drive)
+Local changes (2):
+  +L drafts/todo.txt  (new locally)
+  ML notes/ideas.txt  (modified locally)
+
+$ aethel commit -m "demo sync"
+Commit complete: 2 downloaded, 2 uploaded
+
+$ aethel status
+Everything up to date.
+```
+
 ## Usage
 
 ```bash
