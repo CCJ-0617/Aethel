@@ -40,8 +40,9 @@ export async function persistCredentials(sourcePath) {
   const resolved = path.resolve(sourcePath);
   if (resolved === dest) return;
   if (fsSyncFallback.existsSync(dest)) return;
-  await fs.mkdir(CONFIG_DIR, { recursive: true });
+  await fs.mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
   await fs.copyFile(resolved, dest);
+  await fs.chmod(dest, 0o600);
 }
 
 export function resolveCredentialsPath(customPath) {
@@ -109,8 +110,8 @@ function createOAuthClient(config, redirectUri) {
 }
 
 async function persistToken(tokenPath, credentials) {
-  await fs.mkdir(path.dirname(path.resolve(tokenPath)), { recursive: true });
-  await fs.writeFile(tokenPath, JSON.stringify(credentials, null, 2) + "\n");
+  await fs.mkdir(path.dirname(path.resolve(tokenPath)), { recursive: true, mode: 0o700 });
+  await fs.writeFile(tokenPath, JSON.stringify(credentials, null, 2) + "\n", { mode: 0o600 });
 }
 
 function attachTokenPersistence(client, tokenPath) {

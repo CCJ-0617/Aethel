@@ -17,6 +17,48 @@ export async function md5Local(filePath) {
   });
 }
 
+/**
+ * Stream-hash a file with the given algorithm (default sha256).
+ * Returns hex digest.
+ */
+export async function hashFile(filePath, algorithm = "sha256") {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash(algorithm);
+    const stream = fs.createReadStream(filePath);
+
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+/**
+ * Compute a SHA-256 integrity checksum over the snapshot's data fields.
+ * The checksum covers files + localFiles + message + timestamp, but NOT
+ * the checksum field itself, so it can be verified after reading.
+ */
+export function computeSnapshotChecksum(snapshot) {
+  const canonical = JSON.stringify({
+    timestamp: snapshot.timestamp,
+    message: snapshot.message,
+    files: snapshot.files,
+    localFiles: snapshot.localFiles,
+  });
+  return crypto.createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * Verify a snapshot's embedded checksum.  Returns true if valid or
+ * if the snapshot has no checksum (pre-integrity snapshots).
+ */
+export function verifySnapshotChecksum(snapshot) {
+  if (!snapshot?._checksum) return { valid: true, reason: "no checksum (legacy snapshot)" };
+  const expected = snapshot._checksum;
+  const actual = computeSnapshotChecksum(snapshot);
+  if (actual === expected) return { valid: true, reason: "checksum valid" };
+  return { valid: false, reason: `checksum mismatch: expected ${expected.slice(0, 12)}…, got ${actual.slice(0, 12)}…` };
+}
+
 // ── Hash cache ───────────────────────────────────────────────────────
 
 function hashCachePath(root) {
@@ -227,10 +269,14 @@ export function buildSnapshot(remoteFiles, localFiles, message = "") {
     };
   }
 
-  return {
+  const snapshot = {
     timestamp: new Date().toISOString(),
     message,
     files,
     localFiles: { ...localFiles },
   };
+
+  // Embed integrity checksum
+  snapshot._checksum = computeSnapshotChecksum(snapshot);
+  return snapshot;
 }

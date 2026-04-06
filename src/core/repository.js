@@ -36,7 +36,13 @@ import {
   readRemoteCache,
   writeRemoteCache,
 } from "./remote-cache.js";
-import { buildSnapshot, scanLocal } from "./snapshot.js";
+import {
+  buildSnapshot,
+  hashFile,
+  md5Local,
+  scanLocal,
+  verifySnapshotChecksum,
+} from "./snapshot.js";
 import {
   stageChange,
   stageChanges,
@@ -327,6 +333,87 @@ export class Repository {
     if (!match) return null;
 
     return JSON.parse(fs.readFileSync(path.join(historyPath, match), "utf-8"));
+  }
+
+  // ── Integrity verification ──────────────────────────────────────────
+
+  /**
+   * Full integrity verification of the workspace.
+   * Checks: snapshot checksum, local files vs snapshot md5, remote vs snapshot md5.
+   *
+   * @param {object} [options]
+   * @param {boolean} [options.checkRemote=false]  Also verify remote checksums (requires connect)
+   * @param {function} [options.onProgress]         (done, total, path, status) callback
+   * @returns {{ ok: boolean, snapshot: object, local: object[], remote: object[] }}
+   */
+  async verify({ checkRemote = false, onProgress } = {}) {
+    const snapshot = readLatestSnapshot(this._root, { verify: true });
+    const result = { ok: true, snapshot: { valid: true }, local: [], remote: [] };
+
+    if (!snapshot) {
+      return { ok: true, snapshot: { valid: true, reason: "no snapshot yet" }, local: [], remote: [] };
+    }
+
+    // 1. Snapshot integrity
+    const snapshotCheck = verifySnapshotChecksum(snapshot);
+    result.snapshot = snapshotCheck;
+    if (!snapshotCheck.valid) result.ok = false;
+
+    // 2. Local file integrity vs snapshot
+    const localFiles = snapshot.localFiles || {};
+    const entries = Object.entries(localFiles).filter(([, meta]) => !meta.isFolder);
+    const total = entries.length + (checkRemote ? Object.keys(snapshot.files || {}).length : 0);
+    let done = 0;
+
+    for (const [relativePath, meta] of entries) {
+      const absPath = path.join(this._root, ...relativePath.split("/"));
+      const entry = { path: relativePath, status: "ok" };
+
+      if (!fs.existsSync(absPath)) {
+        entry.status = "missing";
+        result.ok = false;
+      } else if (meta.md5) {
+        const actual = await md5Local(absPath);
+        if (actual !== meta.md5) {
+          entry.status = "modified";
+          entry.expected = meta.md5;
+          entry.actual = actual;
+          result.ok = false;
+        }
+      }
+
+      if (entry.status !== "ok") result.local.push(entry);
+      done++;
+      onProgress?.(done, total, relativePath, entry.status);
+    }
+
+    // 3. Remote integrity vs snapshot (optional, requires API call)
+    if (checkRemote) {
+      const remoteState = await this._loadRemoteState({ useCache: false });
+      const remoteById = new Map(remoteState.files.map((f) => [f.id, f]));
+
+      for (const [fileId, snapEntry] of Object.entries(snapshot.files || {})) {
+        if (snapEntry.isFolder) { done++; continue; }
+        const entry = { path: snapEntry.path || snapEntry.localPath, status: "ok" };
+        const remote = remoteById.get(fileId);
+
+        if (!remote) {
+          entry.status = "deleted_remote";
+          result.ok = false;
+        } else if (snapEntry.md5Checksum && remote.md5Checksum && snapEntry.md5Checksum !== remote.md5Checksum) {
+          entry.status = "modified_remote";
+          entry.expected = snapEntry.md5Checksum;
+          entry.actual = remote.md5Checksum;
+          result.ok = false;
+        }
+
+        if (entry.status !== "ok") result.remote.push(entry);
+        done++;
+        onProgress?.(done, total, entry.path, entry.status);
+      }
+    }
+
+    return result;
   }
 
   // ── Private helpers ─────────────────────────────────────────────────

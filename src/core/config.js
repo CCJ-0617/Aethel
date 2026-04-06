@@ -2,6 +2,7 @@
  * .aethel/ directory management, configuration, and state persistence.
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -97,10 +98,28 @@ export function latestSnapshotPath(root) {
   return path.join(dot(root), SNAPSHOTS_DIR, LATEST_SNAPSHOT);
 }
 
-export function readLatestSnapshot(root) {
+export function readLatestSnapshot(root, { verify = false } = {}) {
   const p = latestSnapshotPath(root);
   if (!fs.existsSync(p)) return null;
-  return JSON.parse(fs.readFileSync(p, "utf-8"));
+  const snapshot = JSON.parse(fs.readFileSync(p, "utf-8"));
+
+  if (verify && snapshot._checksum) {
+    const canonical = JSON.stringify({
+      timestamp: snapshot.timestamp,
+      message: snapshot.message,
+      files: snapshot.files,
+      localFiles: snapshot.localFiles,
+    });
+    const actual = crypto.createHash("sha256").update(canonical).digest("hex");
+    if (actual !== snapshot._checksum) {
+      throw new Error(
+        `Snapshot integrity check failed: checksum mismatch. ` +
+        `The snapshot file may have been tampered with.`
+      );
+    }
+  }
+
+  return snapshot;
 }
 
 export function writeSnapshot(root, snapshot) {

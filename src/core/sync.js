@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { readConfig, readIndex, writeIndex } from "./config.js";
 import { downloadFile, ensureFolder, trashFile, uploadFile } from "./drive-api.js";
+import { md5Local } from "./snapshot.js";
 
 function readPositiveIntEnv(name, fallback) {
   const rawValue = Number.parseInt(process.env[name] || "", 10);
@@ -11,7 +12,12 @@ function readPositiveIntEnv(name, fallback) {
 const CONCURRENCY = readPositiveIntEnv("AETHEL_DRIVE_CONCURRENCY", 10);
 
 function toLocalAbsolutePath(root, relativePath) {
-  return path.join(root, ...relativePath.split("/"));
+  const abs = path.resolve(root, ...relativePath.split("/"));
+  const resolvedRoot = path.resolve(root);
+  if (!abs.startsWith(resolvedRoot + path.sep) && abs !== resolvedRoot) {
+    throw new Error(`Path traversal blocked: ${relativePath} resolves outside workspace`);
+  }
+  return abs;
 }
 
 export class CommitResult {
@@ -102,10 +108,22 @@ async function uploadStagedFile(drive, entry, root, driveFolderId) {
     parentId = await ensureFolder(drive, parentPath, driveFolderId);
   }
 
-  await uploadFile(drive, localAbsolutePath, remotePath, {
+  const uploadResult = await uploadFile(drive, localAbsolutePath, remotePath, {
     parentId,
     existingId: entry.fileId || null,
   });
+
+  // Verify: Drive-returned md5 must match the local file we just uploaded.
+  // Google Workspace files (Docs, Sheets, etc.) don't have md5 — skip them.
+  if (uploadResult?.md5Checksum) {
+    const localMd5 = await md5Local(localAbsolutePath);
+    if (localMd5 !== uploadResult.md5Checksum) {
+      throw new Error(
+        `Upload integrity check failed for ${remotePath}: ` +
+        `local md5 ${localMd5}, Drive returned ${uploadResult.md5Checksum}`
+      );
+    }
+  }
 }
 
 async function deleteLocalFile(entry, root) {
@@ -194,6 +212,7 @@ export async function executeStaged(drive, root, progress) {
   // Remote operations (download, upload, delete_remote) share a concurrency pool.
   const localDeletes = [];
   const remoteOps = [];
+  const failedPaths = new Set();
 
   for (const [i, entry] of staged.entries()) {
     if (entry.action === "delete_local") {
@@ -210,6 +229,7 @@ export async function executeStaged(drive, root, progress) {
         await deleteLocalFile(entry, root);
         result.deletedLocal++;
       } catch (err) {
+        failedPaths.add(entry.path);
         result.errors.push(`delete_local ${entry.path}: ${err.message}`);
       }
     })
@@ -242,13 +262,20 @@ export async function executeStaged(drive, root, progress) {
     completed++;
     const op = remoteOps[idx];
     if (err) {
+      failedPaths.add(op.entry.path);
       result.errors.push(`${op.entry.action} ${op.entry.path}: ${err.message}`);
     }
     progress?.(completed - 1, staged.length, op.entry.action, path.posix.basename(op.entry.path || ""));
   });
 
   progress?.(staged.length, staged.length, "done", "");
-  index.staged = [];
+
+  // Only clear succeeded entries — keep failed ones staged for retry
+  if (failedPaths.size > 0) {
+    index.staged = staged.filter((e) => failedPaths.has(e.path));
+  } else {
+    index.staged = [];
+  }
   writeIndex(root, index);
 
   return result;

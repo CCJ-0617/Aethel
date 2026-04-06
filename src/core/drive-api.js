@@ -111,7 +111,12 @@ export function isWorkspaceType(mime) {
 }
 
 function escapeDriveQueryValue(value) {
-  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  // Google Drive API query strings use single-quoted values.
+  // Escape backslashes first, then single quotes.
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"');
 }
 
 export function iconForMime(mime) {
@@ -504,14 +509,36 @@ export async function downloadFile(drive, fileMeta, localPath) {
       { responseType: "stream" }
     );
     await pipeline(response.data, fs.createWriteStream(targetPath));
+    // Exported files have no md5Checksum from Drive — skip verification
     return;
   }
 
+  // Stream to disk while computing MD5 in parallel
+  const { createHash } = await import("node:crypto");
+  const md5 = createHash("md5");
+  const writeStream = fs.createWriteStream(localPath);
   const response = await drive.files.get(
     { fileId: fileMeta.id, alt: "media", supportsAllDrives: true },
     { responseType: "stream" }
   );
-  await pipeline(response.data, fs.createWriteStream(localPath));
+
+  // Tee: pipe to both disk and hasher
+  response.data.on("data", (chunk) => md5.update(chunk));
+  await pipeline(response.data, writeStream);
+
+  // Verify integrity if Drive provided an md5
+  const expectedMd5 = fileMeta.md5Checksum;
+  if (expectedMd5) {
+    const actualMd5 = md5.digest("hex");
+    if (actualMd5 !== expectedMd5) {
+      // Remove corrupt file
+      fs.unlinkSync(localPath);
+      throw new Error(
+        `Integrity check failed for ${fileMeta.name}: ` +
+        `expected md5 ${expectedMd5}, got ${actualMd5}`
+      );
+    }
+  }
 }
 
 export async function uploadFile(
