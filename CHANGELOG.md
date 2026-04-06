@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0 (2026-04-06)
+
+- release: 1.0.0
+
 ## 0.4.0 (2026-04-06)
 
 - Add pull --all for full remote download
