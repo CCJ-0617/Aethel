@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -62,6 +63,10 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function md5(buffer) {
+  return createHash("md5").update(buffer).digest("hex");
+}
+
 function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
   const items = new Map(initialItems.map((item) => [item.id, clone(item)]));
   let sequence = 0;
@@ -103,11 +108,14 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
 
   async function drain(stream) {
     if (!stream) {
-      return;
+      return Buffer.alloc(0);
     }
 
-    for await (const _ of stream) {
+    const chunks = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
+    return Buffer.concat(chunks);
   }
 
   function touch(item) {
@@ -144,7 +152,7 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
         };
       },
       async create({ requestBody, media }) {
-        await drain(media?.body);
+        const body = await drain(media?.body);
         const id = `id-${++idCounter}`;
         const createdTime = new Date(1700000000000 + sequence++).toISOString();
         const item = {
@@ -154,8 +162,8 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
           parents: requestBody.parents || [],
           createdTime,
           modifiedTime: createdTime,
-          md5Checksum: requestBody.mimeType === FOLDER_MIME ? null : `md5-${id}`,
-          size: requestBody.mimeType === FOLDER_MIME ? null : 1,
+          md5Checksum: requestBody.mimeType === FOLDER_MIME ? null : md5(body),
+          size: requestBody.mimeType === FOLDER_MIME ? null : body.length,
           capabilities: {
             canAddChildren: true,
             canEdit: true,
@@ -169,7 +177,7 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
         return { data: clone(item) };
       },
       async update({ fileId, requestBody = {}, addParents, removeParents, media }) {
-        await drain(media?.body);
+        const body = await drain(media?.body);
         const item = items.get(fileId);
 
         if (requestBody.name) {
@@ -191,6 +199,11 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
             nextParents.add(addParents);
           }
           item.parents = [...nextParents];
+        }
+
+        if (body.length && item.mimeType !== FOLDER_MIME) {
+          item.md5Checksum = md5(body);
+          item.size = body.length;
         }
 
         touch(item);
