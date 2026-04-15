@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0 (2026-04-15)
+
+- Add Packing modules
+
 ## 1.1.0 (2026-04-15)
 
 ### Added
