@@ -5,6 +5,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import YAML from "yaml";
+import { createManifest } from "./pack-manifest.js";
 
 export const AETHEL_DIR = ".aethel";
 export const CONFIG_FILE = "config.json";
@@ -12,6 +14,8 @@ export const INDEX_FILE = "index.json";
 export const SNAPSHOTS_DIR = "snapshots";
 export const HISTORY_DIR = "history";
 export const LATEST_SNAPSHOT = "latest.json";
+export const PACK_MANIFEST_FILE = "pack-manifest.json";
+export const PACK_CONFIG_FILE = ".aethelconfig";
 
 /** Walk up from `start` looking for a .aethel/ directory. */
 export function findRoot(start = process.cwd()) {
@@ -134,4 +138,119 @@ export function writeSnapshot(root, snapshot) {
 
   // Compact JSON — snapshots can be large, pretty-printing is slow + wastes disk
   fs.writeFileSync(latest, JSON.stringify(snapshot) + "\n");
+}
+
+// ── pack config helpers ───────────────────────────────────────────────
+
+const DEFAULT_PACK_CONFIG = {
+  packing: {
+    enabled: false,
+    compression: {
+      default: {
+        algorithm: "zstd",
+        level: 6,
+      },
+      overrides: [],
+    },
+    rules: [],
+  },
+};
+
+/**
+ * Load pack configuration from .aethelconfig (YAML).
+ * Returns default config if file doesn't exist.
+ * @param {string} root - Workspace root
+ * @returns {object} Pack configuration
+ */
+export function loadPackConfig(root) {
+  const p = path.join(root, PACK_CONFIG_FILE);
+  if (!fs.existsSync(p)) {
+    return structuredClone(DEFAULT_PACK_CONFIG);
+  }
+  try {
+    const content = fs.readFileSync(p, "utf-8");
+    const parsed = YAML.parse(content);
+    // Merge with defaults for missing keys
+    return {
+      packing: {
+        ...DEFAULT_PACK_CONFIG.packing,
+        ...parsed?.packing,
+        compression: {
+          ...DEFAULT_PACK_CONFIG.packing.compression,
+          ...parsed?.packing?.compression,
+        },
+      },
+    };
+  } catch {
+    return structuredClone(DEFAULT_PACK_CONFIG);
+  }
+}
+
+/**
+ * Save pack configuration to .aethelconfig.
+ * @param {string} root - Workspace root
+ * @param {object} config - Configuration to save
+ */
+export function savePackConfig(root, config) {
+  const p = path.join(root, PACK_CONFIG_FILE);
+  const content = YAML.stringify(config);
+  fs.writeFileSync(p, content);
+}
+
+/**
+ * Read pack manifest from .aethel/pack-manifest.json.
+ * Returns empty manifest if file doesn't exist.
+ * @param {string} root - Workspace root
+ * @returns {object} Pack manifest
+ */
+export function loadPackManifest(root) {
+  const p = path.join(dot(root), PACK_MANIFEST_FILE);
+  if (!fs.existsSync(p)) {
+    return createManifest();
+  }
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf-8"));
+  } catch {
+    return createManifest();
+  }
+}
+
+/**
+ * Save pack manifest to .aethel/pack-manifest.json.
+ * @param {string} root - Workspace root
+ * @param {object} manifest - Manifest to save
+ */
+export function savePackManifest(root, manifest) {
+  const p = path.join(dot(root), PACK_MANIFEST_FILE);
+  fs.writeFileSync(p, JSON.stringify(manifest, null, 2) + "\n");
+}
+
+/**
+ * Check if packing feature is enabled.
+ * @param {string} root - Workspace root
+ * @returns {boolean}
+ */
+export function isPackingEnabled(root) {
+  const config = loadPackConfig(root);
+  return config.packing?.enabled === true;
+}
+
+/**
+ * Get packing rule for a specific path.
+ * @param {object} packConfig - Pack configuration
+ * @param {string} relativePath - Path to check
+ * @returns {object|null} Matching rule or null
+ */
+export function getPackRule(packConfig, relativePath) {
+  const rules = packConfig.packing?.rules ?? [];
+  const normalized = relativePath.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+
+  for (const rule of rules) {
+    const rulePath = rule.path.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+    if (normalized === rulePath || normalized.startsWith(rulePath + "/")) {
+      return rule;
+    }
+  }
+
+  return null;
 }
