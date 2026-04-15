@@ -1,0 +1,134 @@
+name: Version & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      summary:
+        description: "One-line changelog entry for this release"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Verify package contents
+        run: npm run pack:check
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        id: bump
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          npm version ${{ inputs.bump }} --no-git-tag-version
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Update changelog
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          DATE=$(date -u +%Y-%m-%d)
+          SUMMARY=$(cat <<'SUMMARY_EOF'
+          ${{ inputs.summary }}
+          SUMMARY_EOF
+          )
+          ENTRY="## ${VERSION} (${DATE})\n\n- ${SUMMARY}"
+          sed -i "0,/^# Changelog$/s/^# Changelog$/# Changelog\n\n${ENTRY}/" CHANGELOG.md
+
+      - name: Commit, tag, and push
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          TAG="v${VERSION}"
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -m "release: ${VERSION}"
+          git tag -a "$TAG" -m "Release ${VERSION}"
+          git push origin main --follow-tags
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          TAG="v${VERSION}"
+          PREV_TAG="${{ steps.bump.outputs.prev_tag }}"
+          SUMMARY=$(cat <<'SUMMARY_EOF'
+          ${{ inputs.summary }}
+          SUMMARY_EOF
+          )
+          NOTES="- ${SUMMARY}"
+          if [ -n "$PREV_TAG" ]; then
+            NOTES="${NOTES}
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
+          fi
+          gh release create "$TAG" --title "$TAG" --notes "$NOTES"
+
+      # ── Publish to npm ──
+      - name: Setup npm registry
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # ── Publish to GitHub Packages ──
+      - name: Setup GitHub Packages registry
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          registry-url: https://npm.pkg.github.com
+
+      - name: Scope package for GitHub Packages
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            pkg.name = '@ccj-0617/aethel';
+            pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Publish to GitHub Packages
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

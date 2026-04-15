@@ -1,0 +1,35 @@
+# Credentials and secrets
+credentials.json
+token.json
+client_secret*.json
+.env
+.env.*
+
+# Project state
+.aethel/
+.claude/
+
+# Build / editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# LaTeX build output
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.synctex.gz
+
+# Dev files
+PROGRESS.md
+TODO.md
+test/
+docs/
+scripts/
+
+# OS / misc
+node_modules/
