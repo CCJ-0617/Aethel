@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.0 (2026-04-15)
+
+### Added
+- **Directory Packing**: Pack large directories (e.g., `node_modules`) into compressed archives for faster sync
+- Multi-algorithm compression support: gzip, brotli (built-in), zstd, xz (optional)
+- Tree hash algorithm for fast directory fingerprinting (~30x faster than MD5)
+- Pack-aware scanning that skips packed directories
+- Pack change detection: PACK_NEW, PACK_LOCAL_MODIFIED, PACK_REMOTE_MODIFIED, PACK_SYNCED, PACK_CONFLICT
+- `aethel status --verbose` shows synced packs
+- `.aethelconfig` YAML file for packing configuration
+
+### Changed
+- Upgraded ink from 6.8.0 to 7.0.0
+- Upgraded react from 19.2.4 to 19.2.5
+
 ## 1.0.0 (2026-04-06)
 
 - release: 1.0.0

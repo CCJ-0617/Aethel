@@ -45,6 +45,15 @@ The core design is not a live mirror between local storage and Drive. Instead, s
   - Manages `.aethelignore`
 - `src/core/remote-cache.js`
   - Short-lived cache for remote listings
+- `src/core/compress.js`
+  - Multi-algorithm compression (gzip, brotli, zstd, xz)
+  - Compression profiles and algorithm detection
+- `src/core/pack.js`
+  - Tar archive creation and extraction
+  - Tree hash algorithm for fast directory fingerprinting
+- `src/core/pack-manifest.js`
+  - CRUD operations for pack manifest
+  - Tracks packed directories and their sync state
 
 ### 2.3 State Storage Layer
 
@@ -55,16 +64,20 @@ After workspace initialization, the project root contains:
   config.json
   index.json
   .hash-cache.json
+  pack-manifest.json
   snapshots/
     latest.json
     history/
+.aethelconfig
 ```
 
 - `config.json`: sync root configuration
 - `index.json`: currently staged operations
 - `.hash-cache.json`: local file hash cache
+- `pack-manifest.json`: tracks packed directories and their sync state
 - `snapshots/latest.json`: baseline state after the most recent successful sync
 - `snapshots/history/`: archived older snapshots
+- `.aethelconfig` (workspace root): YAML configuration for directory packing
 
 ## 3. Core Data Flow
 
@@ -124,6 +137,7 @@ That means the system does not compare only "local vs remote". It also asks:
 
 `src/core/diff.js` classifies changes as:
 
+**File changes:**
 - `remote_added`
 - `remote_modified`
 - `remote_deleted`
@@ -132,6 +146,13 @@ That means the system does not compare only "local vs remote". It also asks:
 - `local_deleted`
 - `conflict`
 
+**Pack changes (for packed directories):**
+- `pack_new` - directory newly configured for packing
+- `pack_local_modified` - packed directory changed locally
+- `pack_remote_modified` - packed directory changed on Drive
+- `pack_synced` - packed directory up to date
+- `pack_conflict` - both sides changed the packed directory
+
 It also provides default suggested actions for each category:
 
 - Drive added/modified -> `download`
@@ -139,6 +160,9 @@ It also provides default suggested actions for each category:
 - Local added/modified -> `upload`
 - Local deleted -> `delete_remote`
 - Both sides changed the same path -> `conflict`
+- Pack new/local modified -> `push_pack`
+- Pack remote modified -> `pull_pack`
+- Pack conflict -> `resolve_pack`
 
 ### 4.3 Execution Model
 
