@@ -2,7 +2,7 @@
  * Directory packing operations: tar archive creation/extraction and tree hash.
  */
 
-import tar from "tar";
+import * as tar from "tar";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";

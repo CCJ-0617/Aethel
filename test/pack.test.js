@@ -198,11 +198,18 @@ test("createPack and extractPack roundtrip preserves content", async () => {
     // Extract pack
     await extractPack(packResult.packPath, extractDir);
 
-    // Compare tree hashes
-    const originalHash = await getTreeHash(testDir);
-    const extractedHash = await getTreeHash(extractDir);
+    // Compare actual file contents (tree hash uses mtime which changes on extract)
+    const original1 = await fs.readFile(path.join(testDir, "file1.txt"), "utf-8");
+    const extracted1 = await fs.readFile(path.join(extractDir, "file1.txt"), "utf-8");
+    assert.equal(original1, extracted1);
 
-    assert.equal(originalHash, extractedHash);
+    const original2 = await fs.readFile(path.join(testDir, "file2.txt"), "utf-8");
+    const extracted2 = await fs.readFile(path.join(extractDir, "file2.txt"), "utf-8");
+    assert.equal(original2, extracted2);
+
+    const originalNested = await fs.readFile(path.join(testDir, "subdir", "nested.txt"), "utf-8");
+    const extractedNested = await fs.readFile(path.join(extractDir, "subdir", "nested.txt"), "utf-8");
+    assert.equal(originalNested, extractedNested);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }

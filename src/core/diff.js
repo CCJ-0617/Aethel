@@ -1,5 +1,6 @@
 import { isWorkspaceType } from "./drive-api.js";
 import { loadIgnoreRules } from "./ignore.js";
+import { loadPackManifest } from "./config.js";
 
 export const ChangeType = Object.freeze({
   REMOTE_ADDED: "remote_added",
@@ -9,6 +10,12 @@ export const ChangeType = Object.freeze({
   LOCAL_MODIFIED: "local_modified",
   LOCAL_DELETED: "local_deleted",
   CONFLICT: "conflict",
+  // Pack-specific change types
+  PACK_LOCAL_MODIFIED: "pack_local_modified",
+  PACK_REMOTE_MODIFIED: "pack_remote_modified",
+  PACK_SYNCED: "pack_synced",
+  PACK_CONFLICT: "pack_conflict",
+  PACK_NEW: "pack_new",
 });
 
 const SHORT_STATUS = {
@@ -19,6 +26,11 @@ const SHORT_STATUS = {
   [ChangeType.LOCAL_MODIFIED]: "ML",
   [ChangeType.LOCAL_DELETED]: "-L",
   [ChangeType.CONFLICT]: "!!",
+  [ChangeType.PACK_LOCAL_MODIFIED]: "PL",
+  [ChangeType.PACK_REMOTE_MODIFIED]: "PR",
+  [ChangeType.PACK_SYNCED]: "P=",
+  [ChangeType.PACK_CONFLICT]: "P!",
+  [ChangeType.PACK_NEW]: "P+",
 };
 
 const DESCRIPTION = {
@@ -29,6 +41,11 @@ const DESCRIPTION = {
   [ChangeType.LOCAL_MODIFIED]: "modified locally",
   [ChangeType.LOCAL_DELETED]: "deleted locally",
   [ChangeType.CONFLICT]: "both sides changed",
+  [ChangeType.PACK_LOCAL_MODIFIED]: "pack changed locally",
+  [ChangeType.PACK_REMOTE_MODIFIED]: "pack changed on Drive",
+  [ChangeType.PACK_SYNCED]: "pack up to date",
+  [ChangeType.PACK_CONFLICT]: "pack conflict",
+  [ChangeType.PACK_NEW]: "new pack",
 };
 
 const SUGGESTED_ACTION = {
@@ -39,6 +56,11 @@ const SUGGESTED_ACTION = {
   [ChangeType.LOCAL_MODIFIED]: "upload",
   [ChangeType.LOCAL_DELETED]: "delete_remote",
   [ChangeType.CONFLICT]: "conflict",
+  [ChangeType.PACK_LOCAL_MODIFIED]: "push_pack",
+  [ChangeType.PACK_REMOTE_MODIFIED]: "pull_pack",
+  [ChangeType.PACK_SYNCED]: "none",
+  [ChangeType.PACK_CONFLICT]: "resolve_pack",
+  [ChangeType.PACK_NEW]: "push_pack",
 };
 
 function createChange({
@@ -62,9 +84,10 @@ function createChange({
   };
 }
 
-function buildDiffResult(changes) {
+function buildDiffResult(changes, packChanges = []) {
   return {
     changes,
+    packChanges,
     get remoteChanges() {
       return this.changes.filter((change) =>
         change.changeType.startsWith("remote")
@@ -80,8 +103,29 @@ function buildDiffResult(changes) {
         (change) => change.changeType === ChangeType.CONFLICT
       );
     },
+    get packConflicts() {
+      return this.packChanges.filter(
+        (change) => change.changeType === ChangeType.PACK_CONFLICT
+      );
+    },
+    get pendingPackChanges() {
+      return this.packChanges.filter(
+        (change) =>
+          change.changeType === ChangeType.PACK_LOCAL_MODIFIED ||
+          change.changeType === ChangeType.PACK_REMOTE_MODIFIED ||
+          change.changeType === ChangeType.PACK_NEW
+      );
+    },
+    get syncedPacks() {
+      return this.packChanges.filter(
+        (change) => change.changeType === ChangeType.PACK_SYNCED
+      );
+    },
     get isClean() {
-      return this.changes.length === 0;
+      return this.changes.length === 0 && this.pendingPackChanges.length === 0;
+    },
+    get hasPackChanges() {
+      return this.packChanges.length > 0;
     },
   };
 }
@@ -150,7 +194,7 @@ function promoteConflicts(changes) {
 /**
  * @param {object|null} snapshot
  * @param {object[]} remoteFiles
- * @param {object} localFiles
+ * @param {object} localFiles - Either plain file map or { files, packedDirs }
  * @param {{ root?: string, respectIgnore?: boolean }} options
  */
 export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIgnore = true } = {}) {
@@ -163,6 +207,9 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   const changes = [];
   const snapshotFiles = snapshot?.files || {};
   const snapshotLocalFiles = snapshot?.localFiles || {};
+
+  // Handle both old format (plain object) and new format ({ files, packedDirs })
+  const localFilesData = localFiles?.files ?? localFiles;
 
   // Build remote lookup and detect additions/modifications in one pass
   const remoteById = new Map();
@@ -210,7 +257,7 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
     }
   }
 
-  for (const [relativePath, localMeta] of Object.entries(localFiles)) {
+  for (const [relativePath, localMeta] of Object.entries(localFilesData)) {
     const snapshotEntry = snapshotLocalFiles[relativePath];
 
     if (!snapshotEntry) {
@@ -237,7 +284,7 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   }
 
   for (const [relativePath, snapshotEntry] of Object.entries(snapshotLocalFiles)) {
-    if (!(relativePath in localFiles)) {
+    if (!(relativePath in localFilesData)) {
       changes.push(
         createChange({
           changeType: ChangeType.LOCAL_DELETED,
@@ -248,5 +295,92 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
     }
   }
 
-  return buildDiffResult(promoteConflicts(changes));
+  // Phase 3: Compute pack changes
+  const packChanges = computePackChanges(root, localFiles, snapshot);
+
+  return buildDiffResult(promoteConflicts(changes), packChanges);
+}
+
+/**
+ * Compute changes for packed directories.
+ * @param {string|null} root - Workspace root
+ * @param {object} localFilesData - Local files data (may include packedDirs)
+ * @param {object|null} snapshot - Previous snapshot
+ * @returns {Array} Pack changes
+ */
+function computePackChanges(root, localFilesData, snapshot) {
+  if (!root) return [];
+
+  const packChanges = [];
+  const manifest = loadPackManifest(root);
+  const localPackedDirs = localFilesData?.packedDirs ?? {};
+  const snapshotPackedDirs = snapshot?.packedDirs ?? {};
+
+  // Check each locally detected packed directory
+  for (const [packPath, localPack] of Object.entries(localPackedDirs)) {
+    const manifestEntry = manifest.packs?.[packPath];
+    const snapshotEntry = snapshotPackedDirs[packPath];
+
+    if (!manifestEntry) {
+      // New pack - not yet in manifest (never synced)
+      packChanges.push(
+        createChange({
+          changeType: ChangeType.PACK_NEW,
+          path: packPath,
+          localMeta: localPack,
+        })
+      );
+      continue;
+    }
+
+    const localHash = localPack.treeHash;
+    const manifestLocalHash = manifestEntry.localTreeHash;
+    const manifestRemoteHash = manifestEntry.remoteTreeHash;
+
+    const localChanged = localHash !== manifestLocalHash;
+    const remoteChanged = manifestRemoteHash !== manifestLocalHash;
+
+    if (localChanged && remoteChanged) {
+      // Both changed - conflict
+      packChanges.push(
+        createChange({
+          changeType: ChangeType.PACK_CONFLICT,
+          path: packPath,
+          localMeta: { ...localPack, manifestEntry },
+          snapshotMeta: snapshotEntry,
+        })
+      );
+    } else if (localChanged) {
+      // Only local changed - needs push
+      packChanges.push(
+        createChange({
+          changeType: ChangeType.PACK_LOCAL_MODIFIED,
+          path: packPath,
+          localMeta: { ...localPack, manifestEntry },
+          snapshotMeta: snapshotEntry,
+        })
+      );
+    } else if (remoteChanged) {
+      // Only remote changed - needs pull
+      packChanges.push(
+        createChange({
+          changeType: ChangeType.PACK_REMOTE_MODIFIED,
+          path: packPath,
+          localMeta: { ...localPack, manifestEntry },
+          snapshotMeta: snapshotEntry,
+        })
+      );
+    } else {
+      // Synced
+      packChanges.push(
+        createChange({
+          changeType: ChangeType.PACK_SYNCED,
+          path: packPath,
+          localMeta: { ...localPack, manifestEntry },
+        })
+      );
+    }
+  }
+
+  return packChanges;
 }

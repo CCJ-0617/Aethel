@@ -255,6 +255,34 @@ async function handleStatus(options) {
       console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
     }
   }
+
+  // Display packed directories status
+  if (diff.hasPackChanges) {
+    const pending = diff.pendingPackChanges;
+    const synced = diff.syncedPacks;
+    const packConflicts = diff.packConflicts;
+
+    if (pending.length > 0) {
+      console.log(`\nPacked directories (${pending.length} pending):`);
+      for (const change of pending) {
+        console.log(`  ${change.shortStatus} ${change.path}/  (${change.description})`);
+      }
+    }
+
+    if (packConflicts.length > 0) {
+      console.log(`\nPack conflicts (${packConflicts.length}):`);
+      for (const change of packConflicts) {
+        console.log(`  ${change.shortStatus} ${change.path}/  (${change.description})`);
+      }
+    }
+
+    if (synced.length > 0 && options.verbose) {
+      console.log(`\nSynced packs (${synced.length}):`);
+      for (const change of synced) {
+        console.log(`  ${change.shortStatus} ${change.path}/  (${change.description})`);
+      }
+    }
+  }
 }
 
 async function handleDiff(options) {
@@ -941,9 +969,12 @@ async function main() {
     .option("--drive-folder-name <name>", "Display name for the Drive folder")
     .action(handleInit);
 
-  addAuthOptions(program.command("status").description("Show sync status")).action(
-    handleStatus
-  );
+  addAuthOptions(
+    program
+      .command("status")
+      .description("Show sync status")
+      .option("-v, --verbose", "Show additional details like synced packs")
+  ).action(handleStatus);
 
   addAuthOptions(
     program
