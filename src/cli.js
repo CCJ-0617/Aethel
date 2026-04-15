@@ -289,7 +289,9 @@ async function handleStatus(options) {
   const { diff } = await loadStateWithProgress(repo);
   const staged = repo.getStagedEntries();
 
-  if (diff.isClean && staged.length === 0) {
+  const hasPackChanges = diff.hasPackChanges || (options.verbose && diff.syncedPacks?.length > 0);
+
+  if (diff.isClean && staged.length === 0 && !hasPackChanges) {
     console.log("Everything up to date.");
     return;
   }
@@ -323,6 +325,32 @@ async function handleStatus(options) {
   if (unstagedConflicts.length) {
     console.log(`\nConflicts (${unstagedConflicts.length}):`);
     for (const change of unstagedConflicts) {
+      console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
+    }
+  }
+
+  // Display pack changes
+  const pendingPacks = diff.pendingPackChanges || [];
+  const packConflicts = diff.packConflicts || [];
+  const syncedPacks = diff.syncedPacks || [];
+
+  if (pendingPacks.length) {
+    console.log(`\nPack changes (${pendingPacks.length}):`);
+    for (const change of pendingPacks) {
+      console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
+    }
+  }
+
+  if (packConflicts.length) {
+    console.log(`\nPack conflicts (${packConflicts.length}):`);
+    for (const change of packConflicts) {
+      console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
+    }
+  }
+
+  if (options.verbose && syncedPacks.length) {
+    console.log(`\nSynced packs (${syncedPacks.length}):`);
+    for (const change of syncedPacks) {
       console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
     }
   }
@@ -1081,9 +1109,10 @@ async function main() {
       .option("--drive-folder-name <name>", "Display name for the Drive folder")
   ).action(handleInit);
 
-  addAuthOptions(program.command("status").description("Show sync status")).action(
-    handleStatus
-  );
+  addAuthOptions(
+    program.command("status").description("Show sync status")
+      .option("-v, --verbose", "Show all pack states including synced")
+  ).action(handleStatus);
 
   addAuthOptions(
     program
