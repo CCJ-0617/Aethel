@@ -158,6 +158,46 @@ Dual-pane file browser — local filesystem on the left, Google Drive on the rig
 | `f`                | Open the commands page and choose a TUI action     |
 | `:`                | Run any Aethel CLI command inside the TUI          |
 
+## Directory Packing
+
+Large directories with many small files (e.g., `node_modules`, `vendor`) can be slow to sync. Aethel can pack these into compressed archives for faster transfers.
+
+### Enable Packing
+
+Create `.aethelconfig` in your workspace root:
+
+```yaml
+packing:
+  enabled: true
+  compression:
+    default:
+      algorithm: gzip  # gzip, brotli, zstd, xz, or none
+      level: 6
+  rules:
+    - path: node_modules
+      strategy: full
+    - path: vendor
+      strategy: full
+```
+
+### How It Works
+
+1. **Tree Hash**: Directories are fingerprinted using mtime+size (30x faster than MD5)
+2. **Pack Detection**: `aethel status` shows pack states (P+, PL, PR, P=, P!)
+3. **Compression**: Archives use gzip/brotli (built-in) or zstd/xz (if installed)
+
+### Pack Status Codes
+
+| Code | Meaning |
+|------|---------|
+| `P+` | New pack (not yet synced) |
+| `PL` | Pack changed locally |
+| `PR` | Pack changed on Drive |
+| `P=` | Pack up to date |
+| `P!` | Pack conflict |
+
+Use `aethel status --verbose` to show synced packs.
+
 ## Ignore Patterns
 
 Create `.aethelignore` (gitignore syntax) in your workspace root — or run `aethel init` to generate a default one.
@@ -194,10 +234,13 @@ src/
 │   ├── drive-api.js          Google Drive API wrapper
 │   ├── local-fs.js           Local filesystem operations
 │   ├── remote-cache.js       Short-lived remote file cache
-│   ├── snapshot.js            Local scanning & snapshot creation
+│   ├── snapshot.js           Local scanning & snapshot creation
 │   ├── staging.js            Stage/unstage operations
 │   ├── sync.js               Execute staged changes
-│   └── ignore.js             .aethelignore pattern matching
+│   ├── ignore.js             .aethelignore pattern matching
+│   ├── compress.js           Multi-algorithm compression (gzip, brotli, zstd, xz)
+│   ├── pack.js               Tar archive operations & tree hash
+│   └── pack-manifest.js      Pack manifest CRUD operations
 └── tui/
     ├── app.js                React (Ink) dual-pane component
     ├── index.js              TUI entry
