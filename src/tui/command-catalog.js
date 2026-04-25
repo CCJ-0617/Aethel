@@ -137,4 +137,13 @@ export const COMMAND_CATALOG = [
     template: "mv old/path new/path",
     actions: [],
   },
+  {
+    name: "verify",
+    description: "Verify file integrity against the last snapshot",
+    template: "verify",
+    actions: [
+      { label: "Local Snapshot", command: "verify" },
+      { label: "Local and Remote", command: "verify --remote" },
+    ],
+  },
 ];

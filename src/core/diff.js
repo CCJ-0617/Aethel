@@ -306,6 +306,20 @@ function collectFolderPaths(filePaths) {
   return folders;
 }
 
+function indexSnapshotFilesByPath(snapshotFiles) {
+  const byPath = new Map();
+
+  for (const [fileId, entry] of Object.entries(snapshotFiles || {})) {
+    for (const pathValue of [entry.path, entry.localPath]) {
+      if (pathValue && !byPath.has(pathValue)) {
+        byPath.set(pathValue, { fileId, entry });
+      }
+    }
+  }
+
+  return byPath;
+}
+
 export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIgnore = true } = {}) {
   const ignoreRules = root && respectIgnore ? loadIgnoreRules(root) : null;
 
@@ -321,6 +335,7 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   const changes = [];
   const snapshotFiles = snapshot?.files || {};
   const snapshotLocalFiles = snapshot?.localFiles || {};
+  const snapshotRemoteByPath = indexSnapshotFilesByPath(snapshotFiles);
 
   // Build sets of all folder paths that implicitly exist on each side
   // (from parent directories of files), so we can skip redundant folder additions.
@@ -409,10 +424,12 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
     }
 
     if (localChanged(snapshotEntry, localMeta)) {
+      const remoteEntry = snapshotRemoteByPath.get(relativePath);
       changes.push(
         createChange({
           changeType: ChangeType.LOCAL_MODIFIED,
           path: relativePath,
+          fileId: remoteEntry?.fileId || null,
           localMeta,
           snapshotMeta: snapshotEntry,
         })
@@ -426,10 +443,12 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
       if (snapshotEntry.isFolder && localFolderPaths.has(relativePath)) {
         continue;
       }
+      const remoteEntry = snapshotRemoteByPath.get(relativePath);
       changes.push(
         createChange({
           changeType: ChangeType.LOCAL_DELETED,
           path: relativePath,
+          fileId: remoteEntry?.fileId || null,
           snapshotMeta: snapshotEntry,
         })
       );

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1 (2026-04-26)
+
+- Document the `verify` integrity-check command in the README help guide.
+- Add `verify` to the TUI command catalog with local and remote verification actions.
+- Fix legacy local-delete staging so remote deletions can resolve Drive file IDs from the latest snapshot.
+- Add a debug installer command that symlinks the working-copy CLI as `debug_aethel`.
+
 ## 1.2.0 (2026-04-15)
 
 - Add Packing modules

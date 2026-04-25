@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { readConfig, readIndex, writeIndex } from "./config.js";
+import { readConfig, readIndex, readLatestSnapshot, writeIndex } from "./config.js";
 import { downloadFile, ensureFolder, trashFile, uploadFile } from "./drive-api.js";
 import { md5Local } from "./snapshot.js";
 
@@ -157,12 +157,31 @@ async function deleteLocalFile(entry, root) {
   }
 }
 
-async function deleteRemoteFile(drive, entry) {
-  if (!entry.fileId) {
+function findSnapshotFileIdByPath(snapshot, entry) {
+  const targetPaths = new Set(
+    [entry.remotePath, entry.path, entry.localPath].filter(Boolean)
+  );
+
+  for (const [fileId, snapshotEntry] of Object.entries(snapshot?.files || {})) {
+    if (
+      targetPaths.has(snapshotEntry.path) ||
+      targetPaths.has(snapshotEntry.localPath)
+    ) {
+      return fileId;
+    }
+  }
+
+  return null;
+}
+
+async function deleteRemoteFile(drive, entry, snapshot) {
+  const fileId = entry.fileId || findSnapshotFileIdByPath(snapshot, entry);
+
+  if (!fileId) {
     throw new Error("No fileId was found for delete_remote.");
   }
 
-  await trashFile(drive, entry.fileId);
+  await trashFile(drive, fileId);
 }
 
 // ── Bounded-concurrency runner ───────────────────────────────────────
@@ -205,6 +224,7 @@ export async function executeStaged(drive, root, progress) {
   const config = readConfig(root);
   const index = readIndex(root);
   const staged = index.staged || [];
+  const snapshot = readLatestSnapshot(root);
   const driveFolderId = config.drive_folder_id || null;
   const result = new CommitResult();
 
@@ -248,7 +268,7 @@ export async function executeStaged(drive, root, progress) {
         if (entry.isFolder) result.foldersCreated++;
         else result.uploaded++;
       } else if (action === "delete_remote") {
-        await deleteRemoteFile(drive, entry);
+        await deleteRemoteFile(drive, entry, snapshot);
         result.deletedRemote++;
       } else {
         throw new Error(`Unknown action '${action}'`);
