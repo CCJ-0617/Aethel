@@ -23,6 +23,7 @@ git clone https://github.com/CCJ-0617/Aethel.git
 cd Aethel
 npm install
 npm run install:cli   # symlinks `aethel` into ~/.local/bin
+npm run install:debug # symlinks `debug_aethel` without replacing `aethel`
 ```
 
 </details>
@@ -85,6 +86,7 @@ aethel commit -m "sync"        # execute staged operations
 aethel pull -m "pull"          # fetch remote changes and apply
 aethel pull --all              # download the full remote tree to local
 aethel push -m "push"          # push local changes to Drive
+aethel verify                  # verify local files against the last snapshot
 ```
 
 `pull` applies remote changes relative to the latest snapshot. Use `pull --all` for the first full download or to rehydrate a local workspace from the current remote tree.
@@ -131,9 +133,19 @@ Processes deepest-first for single-pass convergence, caches child state to minim
 | `restore`        | Restore files from the last snapshot                                |
 | `rm`             | Remove local files and stage remote deletion                        |
 | `mv`             | Move or rename local files                                          |
+| `verify`         | Verify local and optional remote integrity against the last snapshot |
 | `clean`          | List and optionally trash/delete Drive files                        |
 | `dedupe-folders` | Detect and merge duplicate remote folders                           |
 | `tui`            | Launch interactive terminal UI                                      |
+
+### Integrity Verification
+
+```bash
+aethel verify          # check snapshot checksum and local file hashes
+aethel verify --remote # also compare Drive file hashes
+```
+
+`verify` compares the latest snapshot with the workspace on disk and exits non-zero when files are missing or modified. Add `--remote` when you also want to verify Drive state before a release, migration, or restore.
 
 ## TUI
 

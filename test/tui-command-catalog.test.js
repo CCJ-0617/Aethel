@@ -25,6 +25,7 @@ test("COMMAND_CATALOG exposes every non-TUI CLI command", () => {
       "restore",
       "rm",
       "mv",
+      "verify",
     ]
   );
 });

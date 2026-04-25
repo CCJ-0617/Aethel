@@ -1,6 +1,6 @@
 {
   "name": "aethel",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Git-style Google Drive sync CLI with interactive TUI",
   "type": "module",
   "license": "MIT",
@@ -48,6 +48,7 @@
     "auth": "node src/cli.js auth",
     "clean": "node src/cli.js clean",
     "install:cli": "bash scripts/install.sh",
+    "install:debug": "bash scripts/install-debug.sh",
     "release": "bash scripts/release.sh",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm test && npm run pack:check",

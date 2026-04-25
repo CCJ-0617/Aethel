@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { initWorkspace, writeIndex } from "../src/core/config.js";
+import { initWorkspace, writeIndex, writeSnapshot } from "../src/core/config.js";
 import {
   dedupeDuplicateFolders,
   ensureFolder,
@@ -403,6 +403,48 @@ test("executeStaged does not create duplicate folders during concurrent uploads"
         item.parents.includes(rootFolders[0].id)
     );
     assert.equal(docsFolders.length, 1);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("executeStaged resolves legacy delete_remote entries from snapshot path", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    writeSnapshot(workspaceRoot, {
+      timestamp: new Date().toISOString(),
+      message: "baseline",
+      files: {
+        "remote-1": {
+          id: "remote-1",
+          name: "Content.md",
+          path: "Content.md",
+          localPath: "Content.md",
+          md5Checksum: "content",
+        },
+      },
+      localFiles: {},
+    });
+    writeIndex(workspaceRoot, {
+      staged: [
+        {
+          action: "delete_remote",
+          path: "Content.md",
+          localPath: "Content.md",
+        },
+      ],
+    });
+
+    const drive = createFakeDrive([
+      file("remote-1", "Content.md", "root", "2026-04-04T10:34:00.000Z", "content"),
+    ]);
+    const result = await executeStaged(drive, workspaceRoot);
+
+    assert.equal(result.deletedRemote, 1);
+    assert.deepEqual(result.errors, []);
+    assert.equal(drive.snapshot().find((item) => item.id === "remote-1").trashed, true);
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }
