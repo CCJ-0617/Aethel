@@ -5,12 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { initWorkspace, writeIndex, writeSnapshot } from "../src/core/config.js";
+import { initWorkspace, readIndex, writeIndex, writeSnapshot } from "../src/core/config.js";
 import {
+  dedupeDuplicateFiles,
   dedupeDuplicateFolders,
   ensureFolder,
   resetFolderLookupCache,
   syncLocalDirectoryToParent,
+  uploadFile,
   uploadLocalEntry,
 } from "../src/core/drive-api.js";
 import { executeStaged } from "../src/core/sync.js";
@@ -179,6 +181,12 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
       async update({ fileId, requestBody = {}, addParents, removeParents, media }) {
         const body = await drain(media?.body);
         const item = items.get(fileId);
+
+        if (!item) {
+          const err = new Error(`File not found: ${fileId}`);
+          err.code = 404;
+          throw err;
+        }
 
         if (requestBody.name) {
           item.name = requestBody.name;
@@ -360,6 +368,54 @@ test("dedupeDuplicateFolders leaves conflicting duplicates in place", async () =
   assert.equal(drive.snapshot().find((item) => item.id === "top-b").trashed, false);
 });
 
+test("dedupeDuplicateFiles dry-run reports duplicates without mutating", async () => {
+  const drive = createFakeDrive([
+    file("old", "report.md", "root", "2026-04-04T10:34:00.000Z", "old"),
+    file("latest", "report.md", "root", "2026-04-04T10:35:00.000Z", "latest"),
+    file("other", "other.md", "root", "2026-04-04T10:36:00.000Z", "other"),
+  ]);
+  const before = drive.snapshot();
+
+  const result = await dedupeDuplicateFiles(drive, null, { execute: false });
+
+  assert.equal(result.duplicateFiles.length, 1);
+  assert.equal(result.duplicateFiles[0].latest.id, "latest");
+  assert.deepEqual(result.duplicateFiles[0].older.map((item) => item.id), ["old"]);
+  assert.equal(result.remainingDuplicateFiles.length, 1);
+  assert.deepEqual(drive.snapshot(), before);
+});
+
+test("dedupeDuplicateFiles keeps latest modified file and trashes older copies", async () => {
+  const drive = createFakeDrive([
+    file("old", "report.md", "root", "2026-04-04T10:34:00.000Z", "old"),
+    file("latest", "report.md", "root", "2026-04-04T10:36:00.000Z", "latest"),
+    file("middle", "report.md", "root", "2026-04-04T10:35:00.000Z", "middle"),
+    folder("docs", "docs", "root", "2026-04-04T10:30:00.000Z"),
+    file("nested-old", "report.md", "docs", "2026-04-04T10:31:00.000Z", "nested-old"),
+    file("nested-latest", "report.md", "docs", "2026-04-04T10:32:00.000Z", "nested-latest"),
+  ]);
+
+  const result = await dedupeDuplicateFiles(drive, null, { execute: true });
+
+  assert.equal(result.duplicateFiles.length, 2);
+  assert.equal(result.keptFiles, 2);
+  assert.equal(result.trashedFiles, 3);
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.remainingDuplicateFiles.length, 0);
+
+  const snapshot = drive.snapshot();
+  const liveReports = snapshot.filter(
+    (item) => item.name === "report.md" && !item.trashed
+  );
+  assert.deepEqual(liveReports.map((item) => item.id).sort(), [
+    "latest",
+    "nested-latest",
+  ]);
+  assert.equal(snapshot.find((item) => item.id === "old").trashed, true);
+  assert.equal(snapshot.find((item) => item.id === "middle").trashed, true);
+  assert.equal(snapshot.find((item) => item.id === "nested-old").trashed, true);
+});
+
 test("executeStaged does not create duplicate folders during concurrent uploads", async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
 
@@ -445,6 +501,99 @@ test("executeStaged resolves legacy delete_remote entries from snapshot path", a
     assert.equal(result.deletedRemote, 1);
     assert.deepEqual(result.errors, []);
     assert.equal(drive.snapshot().find((item) => item.id === "remote-1").trashed, true);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("executeStaged keeps non-empty local folder deletions staged on failure", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    await fs.mkdir(path.join(workspaceRoot, "docs"), { recursive: true });
+    await fs.writeFile(path.join(workspaceRoot, "docs", "keep.txt"), "local");
+
+    writeIndex(workspaceRoot, {
+      staged: [
+        {
+          action: "delete_local",
+          path: "docs",
+          localPath: "docs",
+          isFolder: true,
+        },
+      ],
+    });
+
+    const result = await executeStaged({ files: {} }, workspaceRoot);
+
+    assert.equal(result.deletedLocal, 0);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0], /delete_local docs:/);
+    await fs.stat(path.join(workspaceRoot, "docs", "keep.txt"));
+    assert.equal(readIndex(workspaceRoot).staged.length, 1);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("uploadFile updates an existing same-name file and trashes duplicates", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-upload-"));
+
+  try {
+    const localPath = path.join(workspaceRoot, "report.md");
+    await fs.writeFile(localPath, "new content");
+
+    const drive = createFakeDrive([
+      file("remote-1", "report.md", "root", "2026-04-04T10:34:00.000Z", "old-1"),
+      file("remote-2", "report.md", "root", "2026-04-04T10:35:00.000Z", "old-2"),
+    ]);
+
+    const result = await uploadFile(drive, localPath, "report.md", {
+      parentId: "root",
+      cleanupDuplicates: true,
+    });
+
+    const snapshot = drive.snapshot();
+    const activeReports = snapshot.filter((item) => item.name === "report.md" && !item.trashed);
+    const trashedReports = snapshot.filter((item) => item.name === "report.md" && item.trashed);
+
+    assert.equal(result.id, "remote-1");
+    assert.equal(result.md5Checksum, md5(Buffer.from("new content")));
+    assert.equal(activeReports.length, 1);
+    assert.equal(activeReports[0].id, "remote-1");
+    assert.deepEqual(trashedReports.map((item) => item.id), ["remote-2"]);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("uploadFile falls back from a stale fileId to same-name remote file", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-upload-"));
+
+  try {
+    const localPath = path.join(workspaceRoot, "report.md");
+    await fs.writeFile(localPath, "new content");
+
+    const drive = createFakeDrive([
+      file("remote-1", "report.md", "root", "2026-04-04T10:34:00.000Z", "old-1"),
+      file("remote-2", "report.md", "root", "2026-04-04T10:35:00.000Z", "old-2"),
+    ]);
+
+    const result = await uploadFile(drive, localPath, "report.md", {
+      parentId: "root",
+      existingId: "stale-id",
+      cleanupDuplicates: true,
+    });
+
+    const snapshot = drive.snapshot();
+    const activeReports = snapshot.filter((item) => item.name === "report.md" && !item.trashed);
+    const trashedReports = snapshot.filter((item) => item.name === "report.md" && item.trashed);
+
+    assert.equal(result.id, "remote-1");
+    assert.equal(activeReports.length, 1);
+    assert.equal(activeReports[0].md5Checksum, md5(Buffer.from("new content")));
+    assert.deepEqual(trashedReports.map((item) => item.id), ["remote-2"]);
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }

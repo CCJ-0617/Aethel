@@ -27,6 +27,7 @@ import {
 } from "./core/config.js";
 import { ChangeType } from "./core/diff.js";
 import {
+  dedupeDuplicateFiles,
   dedupeDuplicateFolders,
   DuplicateFoldersError,
 } from "./core/drive-api.js";
@@ -48,6 +49,7 @@ async function openRepo(options, { requireWorkspace = true, silent = false } = {
   const repo = new Repository(root, {
     credentials: options.credentials,
     token: options.token,
+    forceAuth: options.forceAuth,
   });
   const spinner = silent ? null : createSpinner("Connecting to Google Drive...");
   try {
@@ -107,15 +109,21 @@ function assertInsideRoot(root, targetPath) {
 }
 
 function matchesPattern(targetPath, pattern) {
-  if (targetPath === pattern) {
+  const normalizedTarget = targetPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const normalizedPattern = pattern.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+
+  if (
+    normalizedTarget === normalizedPattern ||
+    normalizedTarget.startsWith(`${normalizedPattern}/`)
+  ) {
     return true;
   }
 
-  const expression = pattern
+  const expression = normalizedPattern
     .replace(/[|\\{}()[\]^$+?.]/g, "\\$&")
     .replace(/\*/g, ".*");
 
-  return new RegExp(`^${expression}$`).test(targetPath);
+  return new RegExp(`^${expression}$`).test(normalizedTarget);
 }
 
 function printChangeDetail(change) {
@@ -170,7 +178,7 @@ function requireConfirmation(options) {
 }
 
 async function handleAuth(options) {
-  const repo = await openRepo(options, { requireWorkspace: false });
+  const repo = await openRepo({ ...options, forceAuth: true }, { requireWorkspace: false });
   const spinner = createSpinner("Fetching account info...");
   const account = await repo.getAccountInfo();
   spinner.succeed(`Authenticated as ${account.email}`);
@@ -833,6 +841,24 @@ function handleShow(ref, options) {
   }
 }
 
+function formatCliError(error) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : JSON.stringify(error ?? "Unknown error");
+
+  if (error?.code === "invalid_grant" || /\binvalid_grant\b/i.test(message)) {
+    return (
+      "Google OAuth token is invalid or expired (invalid_grant).\n" +
+      "Run `aethel auth` to sign in again. If that still fails, delete the saved token.json and retry."
+    );
+  }
+
+  return message;
+}
+
 async function handleRestore(paths, options) {
   const repo = await openRepo(options);
   const snapshot = repo.getSnapshot();
@@ -1023,6 +1049,24 @@ function printDedupeSummary(result) {
   console.log(`Remaining duplicate paths: ${result.remainingDuplicateFolders.length}`);
 }
 
+function printDedupeFilesSummary(result) {
+  for (const group of result.duplicateFiles) {
+    console.log(
+      `- ${group.path} | latest=${group.latest.id} | duplicates=${group.files.length}`
+    );
+    for (const older of group.older) {
+      console.log(
+        `    older=${older.id} modified=${older.modifiedTime || "unknown"}`
+      );
+    }
+  }
+  console.log(`Duplicate file paths: ${result.duplicatePaths}`);
+  console.log(`Kept latest files: ${result.keptFiles}`);
+  console.log(`Trashed older files: ${result.trashedFiles}`);
+  console.log(`Errors: ${result.errors.length}`);
+  console.log(`Remaining duplicate file paths: ${result.remainingDuplicateFiles.length}`);
+}
+
 async function handleDedupeFolders(options) {
   const repo = await openRepo(options);
   const config = repo.getConfig();
@@ -1072,6 +1116,45 @@ async function handleDedupeFolders(options) {
     if (result.remainingDuplicateFolders.length > 0) {
       throw new DuplicateFoldersError(result.remainingDuplicateFolders);
     }
+  }
+}
+
+async function handleDedupeFiles(options) {
+  const repo = await openRepo(options);
+  const config = repo.getConfig();
+  const rootFolderId = config.drive_folder_id || null;
+  const ignoreRules = loadIgnoreRules(repo.root);
+  const dedupeSpinner = createSpinner("Scanning for duplicate files...");
+  const result = await dedupeDuplicateFiles(repo.drive, rootFolderId, {
+    execute: Boolean(options.execute),
+    ignoreRules,
+    onProgress: (event) => {
+      if (!options.execute) {
+        return;
+      }
+
+      if (event.type === "trash_duplicate_file") {
+        console.log(`  trashed older file: ${event.path} (${event.fileId})`);
+        return;
+      }
+
+      if (event.type === "error") {
+        console.log(`  ERROR: ${event.path} (${event.fileId}) ${event.message}`);
+      }
+    },
+  });
+
+  dedupeSpinner.succeed(`Scan complete - ${result.duplicateFiles.length} duplicate file group(s) found`);
+
+  if (result.duplicateFiles.length === 0) {
+    return;
+  }
+
+  console.log(options.execute ? "Execution summary:" : "Dry run summary:");
+  printDedupeFilesSummary(result);
+
+  if (options.execute) {
+    repo.invalidateRemoteCache();
   }
 }
 
@@ -1162,6 +1245,13 @@ async function main() {
 
   addAuthOptions(
     program
+      .command("dedupe-files")
+      .description("Detect duplicate remote files and trash older copies")
+      .option("--execute", "Trash older duplicate files, keeping the latest modified file")
+  ).action(handleDedupeFiles);
+
+  addAuthOptions(
+    program
       .command("pull")
       .description("Download remote changes")
       .argument("[paths...]", "Specific paths to pull (default: all)")
@@ -1244,8 +1334,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  const message =
-    error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error ?? "Unknown error");
-  console.error(`Error: ${message}`);
+  console.error(`Error: ${formatCliError(error)}`);
   process.exitCode = 1;
 });

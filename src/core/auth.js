@@ -299,6 +299,30 @@ export async function getAuthClient(credentialsPath, tokenPath) {
   }
 }
 
+/**
+ * Force a new browser OAuth flow, ignoring any cached token.
+ * Used by `aethel auth` so a stale token cannot block re-authentication.
+ */
+export async function refreshAuthClient(credentialsPath, tokenPath) {
+  const resolvedCredentials = resolveCredentialsPath(credentialsPath);
+  const resolvedToken = resolveTokenPath(tokenPath);
+  const key = authCacheKey(resolvedCredentials, resolvedToken);
+
+  _authKey = key;
+  _authPromise = (async () => {
+    const config = await loadClientConfig(resolvedCredentials);
+    return runLocalServerAuth(config, resolvedToken);
+  })();
+
+  try {
+    return await _authPromise;
+  } catch (error) {
+    _authPromise = null;
+    _authKey = null;
+    throw error;
+  }
+}
+
 /** Clear the singleton so the next call re-authenticates. */
 export function resetAuth() {
   _authPromise = null;
@@ -310,7 +334,9 @@ export function resetAuth() {
  * Kept for backwards compatibility — prefer getAuthClient + google.drive
  * for finer control.
  */
-export async function authenticate(credentialsPath, tokenPath) {
-  const authClient = await getAuthClient(credentialsPath, tokenPath);
+export async function authenticate(credentialsPath, tokenPath, options = {}) {
+  const authClient = options.force
+    ? await refreshAuthClient(credentialsPath, tokenPath)
+    : await getAuthClient(credentialsPath, tokenPath);
   return google.drive({ version: "v3", auth: authClient });
 }

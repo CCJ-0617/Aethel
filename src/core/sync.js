@@ -111,6 +111,7 @@ async function uploadStagedFile(drive, entry, root, driveFolderId) {
   const uploadResult = await uploadFile(drive, localAbsolutePath, remotePath, {
     parentId,
     existingId: entry.fileId || null,
+    cleanupDuplicates: true,
   });
 
   // Verify: Drive-returned md5 must match the local file we just uploaded.
@@ -136,7 +137,7 @@ async function deleteLocalFile(entry, root) {
 
   // Empty folder: remove the directory itself
   if (entry.isFolder) {
-    await fs.promises.rmdir(localAbsolutePath).catch(() => {});
+    await fs.promises.rmdir(localAbsolutePath);
   } else {
     await fs.promises.unlink(localAbsolutePath);
   }
@@ -242,9 +243,15 @@ export async function executeStaged(drive, root, progress) {
     }
   }
 
-  // Run local deletes first (fast, no API)
+  // Run local file deletes before folder deletes so a remote-deleted tree can
+  // be removed without reporting non-empty folders as successful deletions.
+  const localFileDeletes = localDeletes.filter(({ entry }) => !entry.isFolder);
+  const localFolderDeletes = localDeletes
+    .filter(({ entry }) => entry.isFolder)
+    .sort((left, right) => right.entry.path.split("/").length - left.entry.path.split("/").length);
+
   await Promise.all(
-    localDeletes.map(async ({ entry }) => {
+    localFileDeletes.map(async ({ entry }) => {
       try {
         await deleteLocalFile(entry, root);
         result.deletedLocal++;
@@ -254,6 +261,16 @@ export async function executeStaged(drive, root, progress) {
       }
     })
   );
+
+  for (const { entry } of localFolderDeletes) {
+    try {
+      await deleteLocalFile(entry, root);
+      result.deletedLocal++;
+    } catch (err) {
+      failedPaths.add(entry.path);
+      result.errors.push(`delete_local ${entry.path}: ${err.message}`);
+    }
+  }
 
   // Run remote operations with bounded concurrency
   const tasks = remoteOps.map(({ entry }) => {

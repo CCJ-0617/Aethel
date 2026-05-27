@@ -440,6 +440,81 @@ function buildDuplicateFolderGroups(folders, rootFolderId = null, ignoreRules = 
     });
 }
 
+function fileModifiedTimeRank(file) {
+  const parsed = Date.parse(file.modifiedTime || file.createdTime || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function latestFileComparator(left, right) {
+  const modifiedDiff = fileModifiedTimeRank(right) - fileModifiedTimeRank(left);
+  if (modifiedDiff !== 0) {
+    return modifiedDiff;
+  }
+
+  const createdDiff = createdTimeRank(right) - createdTimeRank(left);
+  if (createdDiff !== 0) {
+    return createdDiff;
+  }
+
+  return String(right.id || "").localeCompare(String(left.id || ""));
+}
+
+function buildDuplicateFileGroups(folders, rawFiles, rootFolderId = null, ignoreRules = null) {
+  const resolve = createFolderResolver(folders, rootFolderId);
+  const isOrphaned = createOrphanChecker(folders);
+  const groups = new Map();
+
+  for (const file of rawFiles) {
+    const parentId = file.parents?.[0] || "";
+
+    if (parentId && isOrphaned(parentId)) {
+      continue;
+    }
+
+    const parentPath = parentId === rootFolderId ? "" : resolve(parentId);
+    if (rootFolderId && parentPath === null) {
+      continue;
+    }
+
+    const filePath = parentPath ? path.posix.join(parentPath, file.name) : file.name;
+    if (ignoreRules && filePath && ignoreRules.ignores(filePath)) {
+      continue;
+    }
+
+    const key = `${parentId || "root"}::${file.name}`;
+    const fileEntry = {
+      ...file,
+      parentId: parentId || null,
+      path: filePath,
+    };
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        parentId: parentId || null,
+        name: file.name,
+        path: filePath,
+        files: [],
+      });
+    }
+
+    groups.get(key).files.push(fileEntry);
+  }
+
+  return [...groups.values()]
+    .filter((group) => group.files.length > 1)
+    .map((group) => {
+      const filesInGroup = [...group.files].sort(latestFileComparator);
+      return {
+        ...group,
+        files: filesInGroup,
+        latest: filesInGroup[0],
+        older: filesInGroup.slice(1),
+      };
+    })
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
+
 function folderPathDepth(folderPath) {
   return String(folderPath || "")
     .split("/")
@@ -545,34 +620,80 @@ export async function uploadFile(
   drive,
   localPath,
   remotePath,
-  { parentId = null, existingId = null } = {}
+  { parentId = null, existingId = null, cleanupDuplicates = false } = {}
 ) {
   const name = path.basename(remotePath);
-  const media = { body: fs.createReadStream(localPath) };
+  const makeMedia = () => ({ body: fs.createReadStream(localPath) });
+  const targetParentId = parentId || "root";
 
   if (existingId) {
-    const response = await drive.files.update({
-      fileId: existingId,
-      requestBody: { name },
-      media,
-      supportsAllDrives: true,
-      fields: "id,name,parents,md5Checksum,modifiedTime,size,mimeType",
-    });
-    return response.data;
+    try {
+      const response = await drive.files.update({
+        fileId: existingId,
+        requestBody: { name },
+        media: makeMedia(),
+        supportsAllDrives: true,
+        fields: "id,name,parents,md5Checksum,modifiedTime,size,mimeType",
+      });
+      if (cleanupDuplicates) {
+        await trashDuplicateUploadTargets(drive, targetParentId, name, response.data.id);
+      }
+      return response.data;
+    } catch (err) {
+      if (!isMissingDriveFileError(err)) {
+        throw err;
+      }
+    }
+  }
+
+  if (cleanupDuplicates) {
+    const existing = await findUploadTargetByName(drive, targetParentId, name);
+    if (existing) {
+      const response = await drive.files.update({
+        fileId: existing.id,
+        requestBody: { name },
+        media: makeMedia(),
+        supportsAllDrives: true,
+        fields: "id,name,parents,md5Checksum,modifiedTime,size,mimeType",
+      });
+      await trashDuplicateUploadTargets(drive, targetParentId, name, response.data.id);
+      return response.data;
+    }
   }
 
   const requestBody = { name };
-  if (parentId) {
-    requestBody.parents = [parentId];
+  if (targetParentId) {
+    requestBody.parents = [targetParentId];
   }
 
   const response = await drive.files.create({
     requestBody,
-    media,
+    media: makeMedia(),
     supportsAllDrives: true,
     fields: "id,name,parents,md5Checksum,modifiedTime,size,mimeType",
   });
+  if (cleanupDuplicates) {
+    await trashDuplicateUploadTargets(drive, targetParentId, name, response.data.id);
+  }
   return response.data;
+}
+
+function isMissingDriveFileError(err) {
+  return err?.code === 404 || err?.response?.status === 404;
+}
+
+async function findUploadTargetByName(drive, parentId, name) {
+  const matches = await listMatchingChildren(drive, parentId, name);
+  return matches.find((item) => item.mimeType !== FOLDER_MIME) || null;
+}
+
+async function trashDuplicateUploadTargets(drive, parentId, name, keepId) {
+  const matches = await listMatchingChildren(drive, parentId, name);
+  const duplicates = matches.filter(
+    (item) => item.id !== keepId && item.mimeType !== FOLDER_MIME
+  );
+
+  await Promise.all(duplicates.map((item) => trashFile(drive, item.id)));
 }
 
 const _folderIdCache = new Map();
@@ -1277,6 +1398,73 @@ export async function dedupeDuplicateFolders(
     ...stats,
     duplicateFolders: initialGroups,
     remainingDuplicateFolders,
+  };
+}
+
+export async function findDuplicateFiles(drive, rootFolderId = null, ignoreRules = null) {
+  const { folders, files } = await fetchAllItems(drive);
+  return buildDuplicateFileGroups(folders, files, rootFolderId, ignoreRules);
+}
+
+export async function dedupeDuplicateFiles(
+  drive,
+  rootFolderId = null,
+  { execute = false, onProgress = null, ignoreRules = null } = {}
+) {
+  const stats = {
+    duplicatePaths: 0,
+    keptFiles: 0,
+    trashedFiles: 0,
+    errors: [],
+  };
+
+  const { folders, files } = await fetchAllItems(drive);
+  const initialGroups = buildDuplicateFileGroups(folders, files, rootFolderId, ignoreRules);
+  stats.duplicatePaths = initialGroups.length;
+  stats.keptFiles = initialGroups.length;
+
+  if (!execute || initialGroups.length === 0) {
+    return {
+      ...stats,
+      duplicateFiles: initialGroups,
+      remainingDuplicateFiles: initialGroups,
+    };
+  }
+
+  const olderFiles = initialGroups.flatMap((group) =>
+    group.older.map((file) => ({ group, file }))
+  );
+
+  await mapWithConcurrency(olderFiles, DEDUPE_BATCH_SIZE, async ({ group, file }) => {
+    try {
+      await trashFile(drive, file.id);
+      stats.trashedFiles += 1;
+      onProgress?.({
+        type: "trash_duplicate_file",
+        path: group.path,
+        fileId: file.id,
+        keptFileId: group.latest.id,
+      });
+    } catch (err) {
+      const error = {
+        path: group.path,
+        fileId: file.id,
+        message: err.message,
+      };
+      stats.errors.push(error);
+      onProgress?.({
+        type: "error",
+        ...error,
+      });
+    }
+  });
+
+  const remainingDuplicateFiles = await findDuplicateFiles(drive, rootFolderId, ignoreRules);
+
+  return {
+    ...stats,
+    duplicateFiles: initialGroups,
+    remainingDuplicateFiles,
   };
 }
 

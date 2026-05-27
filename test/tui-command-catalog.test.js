@@ -17,6 +17,7 @@ test("COMMAND_CATALOG exposes every non-TUI CLI command", () => {
       "log",
       "fetch",
       "dedupe-folders",
+      "dedupe-files",
       "pull",
       "push",
       "resolve",
