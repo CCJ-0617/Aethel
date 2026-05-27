@@ -73,6 +73,12 @@ export const COMMAND_CATALOG = [
     actions: [{ label: "Dry Run", command: "dedupe-folders" }],
   },
   {
+    name: "dedupe-files",
+    description: "Detect duplicate remote files",
+    template: "dedupe-files",
+    actions: [{ label: "Dry Run", command: "dedupe-files" }],
+  },
+  {
     name: "pull",
     description: "Download remote changes",
     template: "pull",

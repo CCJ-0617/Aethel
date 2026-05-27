@@ -320,6 +320,65 @@ function indexSnapshotFilesByPath(snapshotFiles) {
   return byPath;
 }
 
+function indexRemoteFilesByPath(remoteFiles) {
+  const byPath = new Map();
+
+  for (const remoteFile of remoteFiles) {
+    if (remoteFile.path && !byPath.has(remoteFile.path)) {
+      byPath.set(remoteFile.path, remoteFile);
+    }
+  }
+
+  return byPath;
+}
+
+function entryPath(entry, fallback = "") {
+  return entry?.path || entry?.localPath || fallback;
+}
+
+function filterSnapshotFilesByIgnore(snapshotFiles, ignoreRules) {
+  if (!ignoreRules) {
+    return snapshotFiles || {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(snapshotFiles || {}).filter(([, entry]) => {
+      const pathValue = entryPath(entry);
+      return !pathValue || !ignoreRules.ignores(pathValue);
+    })
+  );
+}
+
+function filterLocalFilesByIgnore(localFiles, ignoreRules) {
+  if (!ignoreRules) {
+    return localFiles || {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(localFiles || {}).filter(([relativePath, entry]) => {
+      const pathValue = entryPath(entry, relativePath);
+      return !pathValue || !ignoreRules.ignores(pathValue);
+    })
+  );
+}
+
+function remoteAndLocalEquivalent(remoteFile, localMeta) {
+  const remoteIsFolder =
+    remoteFile.isFolder ||
+    remoteFile.mimeType === "application/vnd.google-apps.folder";
+  const localIsFolder = Boolean(localMeta?.isFolder);
+
+  if (remoteIsFolder || localIsFolder) {
+    return remoteIsFolder === localIsFolder;
+  }
+
+  if (remoteFile.md5Checksum && localMeta?.md5) {
+    return remoteFile.md5Checksum === localMeta.md5;
+  }
+
+  return false;
+}
+
 export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIgnore = true } = {}) {
   const ignoreRules = root && respectIgnore ? loadIgnoreRules(root) : null;
 
@@ -329,13 +388,14 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   }
 
   // Handle new localFiles format with .files and .packedDirs
-  const localFilesData = localFiles?.files ?? localFiles;
+  const localFilesData = filterLocalFilesByIgnore(localFiles?.files ?? localFiles, ignoreRules);
   const packedDirs = localFiles?.packedDirs ?? {};
 
   const changes = [];
-  const snapshotFiles = snapshot?.files || {};
-  const snapshotLocalFiles = snapshot?.localFiles || {};
+  const snapshotFiles = filterSnapshotFilesByIgnore(snapshot?.files, ignoreRules);
+  const snapshotLocalFiles = filterLocalFilesByIgnore(snapshot?.localFiles, ignoreRules);
   const snapshotRemoteByPath = indexSnapshotFilesByPath(snapshotFiles);
+  const remoteByPath = indexRemoteFilesByPath(remoteFiles);
 
   // Build sets of all folder paths that implicitly exist on each side
   // (from parent directories of files), so we can skip redundant folder additions.
@@ -352,11 +412,27 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
 
   // Build remote lookup and detect additions/modifications in one pass
   const remoteById = new Map();
+  const remoteBaselinePathsHandledLocally = new Set();
   for (const remoteFile of remoteFiles) {
     remoteById.set(remoteFile.id, remoteFile);
     const snapshotEntry = snapshotFiles[remoteFile.id];
 
     if (!snapshotEntry) {
+      const samePathSnapshot = snapshotRemoteByPath.get(remoteFile.path);
+
+      if (samePathSnapshot) {
+        changes.push(
+          createChange({
+            changeType: ChangeType.REMOTE_MODIFIED,
+            path: remoteFile.path,
+            fileId: remoteFile.id,
+            remoteMeta: remoteFile,
+            snapshotMeta: samePathSnapshot.entry,
+          })
+        );
+        continue;
+      }
+
       // Skip remote folder if it already exists locally (as parent or explicit dir)
       if (remoteFile.isFolder && localFolderPaths.has(remoteFile.path)) {
         continue;
@@ -382,6 +458,55 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
           snapshotMeta: snapshotEntry,
         })
       );
+      continue;
+    }
+
+    const missingFromLocalBaseline = !Object.prototype.hasOwnProperty.call(
+      snapshotLocalFiles,
+      remoteFile.path
+    );
+    const missingLocally = !Object.prototype.hasOwnProperty.call(
+      localFilesData,
+      remoteFile.path
+    );
+
+    if (!missingFromLocalBaseline) {
+      continue;
+    }
+
+    if (missingLocally) {
+      // The remote entry was snapshotted without a matching local entry.
+      // Treat it as pending download so a partial local tree can self-heal.
+      if (remoteFile.isFolder && localFolderPaths.has(remoteFile.path)) {
+        continue;
+      }
+
+      changes.push(
+        createChange({
+          changeType: ChangeType.REMOTE_ADDED,
+          path: remoteFile.path,
+          fileId: remoteFile.id,
+          remoteMeta: remoteFile,
+          snapshotMeta: snapshotEntry,
+        })
+      );
+      continue;
+    }
+
+    const localMeta = localFilesData[remoteFile.path];
+    remoteBaselinePathsHandledLocally.add(remoteFile.path);
+
+    if (!remoteAndLocalEquivalent(remoteFile, localMeta)) {
+      changes.push(
+        createChange({
+          changeType: ChangeType.CONFLICT,
+          path: remoteFile.path,
+          fileId: remoteFile.id,
+          remoteMeta: remoteFile,
+          localMeta,
+          snapshotMeta: snapshotEntry,
+        })
+      );
     }
   }
 
@@ -389,15 +514,23 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   for (const fileId of Object.keys(snapshotFiles)) {
     if (!remoteById.has(fileId)) {
       const snapshotEntry = snapshotFiles[fileId];
+      const snapshotPath = snapshotEntry.path || snapshotEntry.localPath || "";
+
+      // Same path with a different Drive ID is a remote replacement, not a
+      // deletion of the local path.
+      if (snapshotPath && remoteByPath.has(snapshotPath)) {
+        continue;
+      }
+
       // Skip folder deletion if the folder still implicitly exists on Drive
       // (e.g. it became non-empty, or was recreated with a different ID)
-      if (snapshotEntry.isFolder && remoteFolderPaths.has(snapshotEntry.path || snapshotEntry.localPath || "")) {
+      if (snapshotEntry.isFolder && remoteFolderPaths.has(snapshotPath)) {
         continue;
       }
       changes.push(
         createChange({
           changeType: ChangeType.REMOTE_DELETED,
-          path: snapshotEntry.path || snapshotEntry.localPath || "",
+          path: snapshotPath,
           fileId,
           snapshotMeta: snapshotEntry,
         })
@@ -406,6 +539,10 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   }
 
   for (const [relativePath, localMeta] of Object.entries(localFilesData)) {
+    if (remoteBaselinePathsHandledLocally.has(relativePath)) {
+      continue;
+    }
+
     const snapshotEntry = snapshotLocalFiles[relativePath];
 
     if (!snapshotEntry) {

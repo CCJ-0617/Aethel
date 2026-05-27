@@ -5,7 +5,7 @@
  * rapid successive commands (e.g. `status` then `add` then `commit`) don't
  * each make a full Drive API round-trip.
  *
- * Default TTL: 60 seconds. Commands that mutate remote state (commit, push)
+ * Default TTL: 600 seconds. Commands that mutate remote state (commit, push)
  * should invalidate the cache.
  */
 
@@ -14,7 +14,7 @@ import path from "node:path";
 import { AETHEL_DIR } from "./config.js";
 
 const CACHE_FILE = ".remote-cache.json";
-const DEFAULT_TTL_MS = 60_000; // 60 seconds
+const DEFAULT_TTL_MS = 600_000; // 600 seconds
 
 function cachePath(root) {
   return path.join(root, AETHEL_DIR, CACHE_FILE);

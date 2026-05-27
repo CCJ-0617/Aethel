@@ -66,6 +66,7 @@ export class Repository {
    * @param {object} [options.drive]       Pre-authenticated drive instance (skips auth)
    * @param {string} [options.credentials] Path to OAuth credentials JSON
    * @param {string} [options.token]       Path to OAuth token JSON
+   * @param {boolean} [options.forceAuth]  Force browser OAuth instead of cached token
    */
   constructor(root, options = {}) {
     this._root = root;
@@ -92,7 +93,9 @@ export class Repository {
   /** Authenticate and prepare the drive connection. Idempotent. */
   async connect() {
     if (this._drive) return;
-    const raw = await authenticate(this._options.credentials, this._options.token);
+    const raw = await authenticate(this._options.credentials, this._options.token, {
+      force: Boolean(this._options.forceAuth),
+    });
     this._drive = withDriveRetry(raw);
   }
 
