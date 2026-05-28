@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.2 (2026-05-28)
+
+- Release Git-compatible Drive sync commands and Node 18 CI fixes
+
 ## Unreleased
 
 - Align CLI spellings with common Git habits:
