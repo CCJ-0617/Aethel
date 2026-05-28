@@ -22,7 +22,7 @@
     "file-manager"
   ],
   "bin": {
-    "aethel": "./src/cli.js"
+    "aethel": "src/cli.js"
   },
   "files": [
     "src/",
