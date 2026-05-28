@@ -15,6 +15,12 @@ export const COMMAND_CATALOG = [
     ],
   },
   {
+    name: "clone",
+    description: "Clone a Drive folder into a new workspace",
+    template: "clone my-drive ./my-drive --no-checkout",
+    actions: [],
+  },
+  {
     name: "init",
     description: "Initialise a sync workspace",
     template: "init --local-path .",
@@ -23,8 +29,11 @@ export const COMMAND_CATALOG = [
   {
     name: "status",
     description: "Show sync status",
-    template: "status",
-    actions: [{ label: "Show Status", command: "status" }],
+    template: "status --short",
+    actions: [
+      { label: "Show Status", command: "status" },
+      { label: "Short Status", command: "status --short" },
+    ],
   },
   {
     name: "diff",
@@ -32,6 +41,7 @@ export const COMMAND_CATALOG = [
     template: "diff --side all",
     actions: [
       { label: "All Changes", command: "diff --side all" },
+      { label: "Staged Changes", command: "diff --staged" },
       { label: "Remote Only", command: "diff --side remote" },
       { label: "Local Only", command: "diff --side local" },
     ],
@@ -39,8 +49,8 @@ export const COMMAND_CATALOG = [
   {
     name: "add",
     description: "Stage changes for commit",
-    template: "add --all",
-    actions: [{ label: "Stage All", command: "add --all" }],
+    template: "add -A",
+    actions: [{ label: "Stage All", command: "add -A" }],
   },
   {
     name: "reset",
@@ -57,8 +67,41 @@ export const COMMAND_CATALOG = [
   {
     name: "log",
     description: "Show commit history",
-    template: "log -n 10",
-    actions: [{ label: "Show Recent History", command: "log -n 10" }],
+    template: "log --oneline -n 10",
+    actions: [
+      { label: "Show Recent History", command: "log --oneline -n 10" },
+      { label: "Show History Stats", command: "log --stat -n 10" },
+    ],
+  },
+  {
+    name: "branch",
+    description: "List, create, or delete branch refs",
+    template: "branch -v",
+    actions: [{ label: "Show Branches", command: "branch -v" }],
+  },
+  {
+    name: "switch",
+    description: "Switch current branch ref",
+    template: "switch main",
+    actions: [{ label: "Switch Main", command: "switch main" }],
+  },
+  {
+    name: "tag",
+    description: "Create or list snapshot tags",
+    template: "tag --list",
+    actions: [
+      { label: "List Tags", command: "tag --list" },
+      { label: "List Tags Verbose", command: "tag --list --verbose" },
+    ],
+  },
+  {
+    name: "remote",
+    description: "Inspect Drive remote configuration",
+    template: "remote -v",
+    actions: [
+      { label: "Show Remote URLs", command: "remote -v" },
+      { label: "Show Origin", command: "remote show origin" },
+    ],
   },
   {
     name: "fetch",
@@ -102,6 +145,8 @@ export const COMMAND_CATALOG = [
     template: "resolve",
     actions: [
       { label: "List Conflicts", command: "resolve" },
+      { label: "Keep Local", command: "resolve --keep local" },
+      { label: "Keep Remote", command: "resolve --keep remote" },
       { label: "Use Ours", command: "resolve --ours" },
       { label: "Use Theirs", command: "resolve --theirs" },
       { label: "Keep Both", command: "resolve --both" },
@@ -119,16 +164,33 @@ export const COMMAND_CATALOG = [
   {
     name: "show",
     description: "Show a commit or snapshot",
-    template: "show HEAD",
+    template: "show --stat HEAD",
     actions: [
       { label: "Show HEAD", command: "show HEAD" },
+      { label: "Show HEAD Stats", command: "show --stat HEAD" },
       { label: "Show HEAD Verbose", command: "show --verbose HEAD" },
     ],
   },
   {
+    name: "rev-parse",
+    description: "Resolve branch, tag, or snapshot refs",
+    template: "rev-parse HEAD",
+    actions: [
+      { label: "Resolve HEAD", command: "rev-parse HEAD" },
+      { label: "Current Branch", command: "rev-parse --abbrev-ref HEAD" },
+      { label: "Short HEAD", command: "rev-parse --short HEAD" },
+    ],
+  },
+  {
     name: "restore",
-    description: "Restore files from the last snapshot",
-    template: "restore path/to/file",
+    description: "Restore files from a snapshot ref",
+    template: "restore --source HEAD path/to/file",
+    actions: [{ label: "Unstage Path", command: "restore --staged path/to/file" }],
+  },
+  {
+    name: "checkout",
+    description: "Alias for restore --source HEAD",
+    template: "checkout path/to/file",
     actions: [],
   },
   {

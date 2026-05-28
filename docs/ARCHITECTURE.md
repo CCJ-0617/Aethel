@@ -5,6 +5,11 @@
 Aethel is a synchronization tool that uses Google Drive as its remote storage. It exposes two interface layers:
 
 - CLI: provides a Git-like workflow with `auth`, `init`, `status`, `diff`, `add`, `commit`, `pull`, and `push`.
+  Git-compatible forms such as `status --short`, `diff --staged`, `add -A`,
+  `reset HEAD <path>`, `restore --staged`, `log --oneline`, `show --stat`,
+  `rev-parse HEAD`, `branch -v`, `switch -c <name>`, `tag <name> HEAD`,
+  `remote -v`, `clone <folder> <dir>`, and `restore --source <ref>` are
+  aliases over Aethel's Drive sync state.
 - TUI: provides an interactive dual-pane interface for local files and Google Drive.
 
 The core design is not a live mirror between local storage and Drive. Instead, synchronization is managed through a `snapshot + diff + staging + execute` pipeline.
@@ -190,6 +195,7 @@ The TUI is not a separate synchronization engine. It directly calls `drive-api.j
 ```bash
 npm install
 npm run auth
+node src/cli.js clone <drive-folder-id> ./workspace
 node src/cli.js init --local-path ./workspace --drive-folder <drive-folder-id>
 ```
 
@@ -203,19 +209,36 @@ Use this when:
 
 ```bash
 node src/cli.js status
-node src/cli.js diff --side all
-node src/cli.js add --all
+node src/cli.js status --short
+node src/cli.js diff --staged
+node src/cli.js add -A
+node src/cli.js restore --staged path/to/file
 node src/cli.js commit -m "sync"
+node src/cli.js remote -v
+node src/cli.js log --oneline
+node src/cli.js rev-parse --abbrev-ref HEAD
+node src/cli.js switch -c experiment
+node src/cli.js tag checkpoint HEAD
 ```
 
 This is the most reasonable standard flow because:
 
 1. `status` gives you the overall state first
 2. `diff` shows details and conflicts
-3. `add --all` stages the default suggested actions
+3. `add -A` stages the default suggested actions
 4. `commit` performs the actual synchronization
 
 This preserves a manual confirmation point and helps avoid pushing a bad state to Drive or overwriting local files by mistake.
+
+### 6.1 Refs
+
+Aethel branch refs are stored under `.aethel/refs/branches.json`. Each branch
+points at a snapshot ref, and the current branch is advanced when a new sync
+snapshot is saved. Switching branches changes the active ref, but it does not
+rewrite the local working tree by itself. Tags are lightweight names stored
+under `.aethel/refs/tags.json` and point at snapshot refs, so `show`,
+`rev-parse`, and `restore --source <ref>` can use memorable names without
+changing Drive state.
 
 ### 6.3 When Conflicts Occur
 

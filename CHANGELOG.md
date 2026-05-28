@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+- Align CLI spellings with common Git habits:
+  - `clone <drive-folder> <dir>`
+  - `status --short` / `status -s`
+  - `diff --staged` / `diff --cached`
+  - `add -A`
+  - `reset HEAD <path>`
+  - `restore --staged <path>`
+  - `log --oneline` / `log --stat`
+  - `show --stat` / `show --oneline`
+  - `rev-parse HEAD`, `rev-parse --short HEAD`, and `rev-parse --abbrev-ref HEAD`
+  - `branch -v`, `branch <name> [ref]`, and `branch --delete <name>`
+  - `switch <name>` and `switch -c <name> [ref]`
+  - `checkout <branch>` and `checkout -b <branch> [ref]`
+  - `tag <name> [ref]`, `tag --list`, and `tag --delete`
+  - `remote -v`, `remote show origin`, and `remote get-url`
+  - `restore --source <ref>` for `HEAD`, branch, tag, or timestamp refs
+  - `checkout <path>` as a restore alias
+- Reserve top-level version output for `--version` so command-level `-v`
+  remains available for Git-style command flags such as `remote -v`.
+- Document Git-compatible command forms in the README and architecture notes.
+
 ## 1.2.1 (2026-04-26)
 
 - Document the `verify` integrity-check command in the README help guide.

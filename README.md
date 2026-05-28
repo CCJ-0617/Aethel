@@ -66,6 +66,9 @@ aethel auth                    # opens browser, saves token.json
 ![Aethel init flow](docs/init.gif)
 
 ```bash
+aethel clone <folder-id-or-url> ./workspace  # Git-style init + full pull
+aethel clone my-drive ./my-drive             # clone entire My Drive
+
 aethel init --local-path ./my-drive     # sync entire My Drive
 aethel init --local-path ./workspace --drive-folder <folder-id>  # sync specific folder
 aethel pull --all -m "initial pull"     # hydrate local files from the current remote tree
@@ -79,13 +82,25 @@ aethel pull --all -m "initial pull"     # hydrate local files from the current r
 
 ```bash
 aethel status                  # local vs remote changes at a glance
+aethel status --short          # compact Git-style status
 aethel diff --side all         # detailed file-level diff
-aethel add --all               # stage default suggested actions
+aethel diff --staged           # staged sync operations (--cached also works)
+aethel add -A                  # stage default suggested actions
+aethel restore --staged <path> # unstage like git restore --staged
 aethel commit -m "sync"        # execute staged operations
 
+aethel remote -v               # show the Drive remote as origin
+aethel fetch                   # refresh remote state without applying
 aethel pull -m "pull"          # fetch remote changes and apply
 aethel pull --all              # download the full remote tree to local
 aethel push -m "push"          # push local changes to Drive
+aethel log --oneline           # compact sync history
+aethel show --stat HEAD        # snapshot summary
+aethel rev-parse --short HEAD  # resolve snapshot refs
+aethel branch -v               # show branch refs and Drive target
+aethel switch -c experiment    # create and switch branch refs
+aethel checkout experiment     # switch to a branch when the name exists
+aethel tag v1 HEAD             # name a snapshot for later inspection
 aethel verify                  # verify local files against the last snapshot
 ```
 
@@ -117,26 +132,74 @@ Processes deepest-first for single-pass convergence, caches child state to minim
 | Command            | Description                                                         |
 | ------------------ | ------------------------------------------------------------------- |
 | `auth`           | OAuth flow — creates `token.json`, verifies Drive access         |
+| `clone`          | Create a workspace from a Drive folder and pull its contents        |
 | `init`           | Initialize a local sync workspace                                   |
-| `status`         | Show local vs remote changes                                        |
-| `diff`           | Detailed file differences                                           |
-| `add`            | Stage changes                                                       |
-| `reset`          | Unstage changes                                                     |
+| `status`         | Show local vs remote changes (`-s` / `--short` supported)           |
+| `diff`           | Detailed file differences (`--staged` / `--cached` supported)       |
+| `add`            | Stage changes (`-A`, `-a`, and `--all` supported)                   |
+| `reset`          | Unstage changes (`reset HEAD <path>` accepted)                      |
 | `commit`         | Execute staged sync operations                                      |
+| `branch`         | List, create, or delete branch refs (`branch -v`)                   |
+| `switch`         | Switch the current branch ref (`switch -c name`)                    |
+| `tag`            | Create, list, or delete snapshot tags                               |
+| `remote`         | Inspect the Drive remote (`remote -v`, `remote show origin`)        |
 | `pull`           | Fetch and apply remote changes (`--all` for full remote download) |
 | `push`           | Push local changes to Drive                                         |
 | `log`            | Sync history                                                        |
 | `fetch`          | Refresh remote state without applying                               |
 | `resolve`        | Resolve conflicts (local / remote / both)                           |
 | `ignore`         | Manage `.aethelignore` patterns                                   |
-| `show`           | Inspect a saved snapshot                                            |
-| `restore`        | Restore files from the last snapshot                                |
+| `show`           | Inspect a saved snapshot (`--stat`, `--oneline`)                    |
+| `rev-parse`      | Resolve `HEAD`, branch, tag, or timestamp refs                      |
+| `restore`        | Restore files from a snapshot ref (`--source`, `--staged`)          |
+| `checkout`       | Switch branch refs or restore paths from `HEAD`                     |
 | `rm`             | Remove local files and stage remote deletion                        |
 | `mv`             | Move or rename local files                                          |
 | `verify`         | Verify local and optional remote integrity against the last snapshot |
 | `clean`          | List and optionally trash/delete Drive files                        |
 | `dedupe-folders` | Detect and merge duplicate remote folders                           |
+| `dedupe-files`   | Detect and remove duplicate remote files                            |
 | `tui`            | Launch interactive terminal UI                                      |
+
+### Git-Compatible Command Forms
+
+Aethel is not Git: `commit` applies Drive sync operations and writes an Aethel
+snapshot, while Google Drive is the remote storage. The daily command shape is
+intentionally close to Git:
+
+| Git habit                    | Aethel form                                      |
+| ---------------------------- | ------------------------------------------------ |
+| `git status --short`         | `aethel status --short` or `aethel status -s`    |
+| `git diff --staged`          | `aethel diff --staged` or `aethel diff --cached` |
+| `git add -A`                 | `aethel add -A`                                  |
+| `git reset HEAD <path>`      | `aethel reset HEAD <path>`                       |
+| `git restore --staged <path>`| `aethel restore --staged <path>`                 |
+| `git commit -m "message"`    | `aethel commit -m "message"`                    |
+| `git log --oneline`          | `aethel log --oneline`                           |
+| `git show --stat HEAD`       | `aethel show --stat HEAD`                        |
+| `git rev-parse HEAD`         | `aethel rev-parse HEAD`                          |
+| `git rev-parse --short HEAD` | `aethel rev-parse --short HEAD`                  |
+| `git rev-parse --abbrev-ref HEAD` | `aethel rev-parse --abbrev-ref HEAD`       |
+| `git branch -v`              | `aethel branch -v`                               |
+| `git branch feature HEAD`    | `aethel branch feature HEAD`                     |
+| `git switch feature`         | `aethel switch feature`                          |
+| `git switch -c feature`      | `aethel switch -c feature`                       |
+| `git checkout feature`       | `aethel checkout feature`                        |
+| `git checkout -b feature`    | `aethel checkout -b feature`                     |
+| `git tag v1 HEAD`            | `aethel tag v1 HEAD`                             |
+| `git remote -v`              | `aethel remote -v`                               |
+| `git clone <url> <dir>`      | `aethel clone <folder-id-or-url> <dir>`          |
+| `git restore --source <ref>` | `aethel restore --source <ref> <path>`           |
+| `git checkout -- <path>`     | `aethel checkout <path>`                         |
+| `git pull` / `git push`      | `aethel pull` / `aethel push`                    |
+
+Existing long Aethel forms such as `add --all` and `reset --all` remain
+supported.
+
+Aethel branches and tags are lightweight refs over snapshots. Switching branch
+refs does not rewrite working files by itself; it changes the current branch
+pointer used for later snapshots. Use `restore --source <branch-or-tag>`,
+`pull`, or explicit sync commands when you want files to move.
 
 ### Integrity Verification
 

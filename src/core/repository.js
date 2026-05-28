@@ -241,7 +241,9 @@ export class Repository {
 
     assertNoDuplicateFolders(remoteState.duplicateFolders);
     writeRemoteCache(this._root, remoteState, rootFolderId);
-    writeSnapshot(this._root, buildSnapshot(remoteState.files, localFiles, message));
+    const snapshot = buildSnapshot(remoteState.files, localFiles, message);
+    writeSnapshot(this._root, snapshot);
+    this.updateCurrentBranch(snapshot);
   }
 
   // ── Cache management ────────────────────────────────────────────────
@@ -290,6 +292,72 @@ export class Repository {
 
   // ── History ─────────────────────────────────────────────────────────
 
+  snapshotRef(snapshot) {
+    return String(snapshot?.timestamp || "snapshot").replace(/[-:TZ.]/g, "").slice(0, 12);
+  }
+
+  _validateRefName(name, kind) {
+    if (!/^[A-Za-z0-9._/-]+$/.test(name || "")) {
+      throw new Error(`${kind} names may contain letters, numbers, '.', '_', '-', and '/'.`);
+    }
+  }
+
+  _tagsPath() {
+    return path.join(this._root, AETHEL_DIR, "refs", "tags.json");
+  }
+
+  _branchesPath() {
+    return path.join(this._root, AETHEL_DIR, "refs", "branches.json");
+  }
+
+  _readTagsFile() {
+    const p = this._tagsPath();
+    if (!fs.existsSync(p)) {
+      return { tags: {} };
+    }
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  }
+
+  _writeTagsFile(data) {
+    const p = this._tagsPath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(data, null, 2) + "\n");
+  }
+
+  _readBranchesFile() {
+    const p = this._branchesPath();
+    if (!fs.existsSync(p)) {
+      const latest = readLatestSnapshot(this._root);
+      return {
+        current: "main",
+        branches: {
+          main: latest
+            ? this._branchEntry(latest)
+            : { ref: null, timestamp: null, message: "", updatedAt: null },
+        },
+      };
+    }
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  }
+
+  _writeBranchesFile(data) {
+    const p = this._branchesPath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    data.current ||= "main";
+    data.branches ||= {};
+    data.branches.main ||= { ref: null, timestamp: null, message: "", updatedAt: null };
+    fs.writeFileSync(p, JSON.stringify(data, null, 2) + "\n");
+  }
+
+  _branchEntry(snapshot) {
+    return {
+      ref: this.snapshotRef(snapshot),
+      timestamp: snapshot?.timestamp || null,
+      message: snapshot?.message || "",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   getHistory(limit = 10) {
     const snapshotsPath = path.join(this._root, AETHEL_DIR, SNAPSHOTS_DIR);
     const entries = [];
@@ -317,9 +385,140 @@ export class Repository {
     return entries.slice(0, limit);
   }
 
+  getTags() {
+    return this._readTagsFile().tags || {};
+  }
+
+  getBranches() {
+    const data = this._readBranchesFile();
+    return {
+      current: data.current || "main",
+      branches: data.branches || {},
+    };
+  }
+
+  createBranch(name, ref = "HEAD", { force = false } = {}) {
+    this._validateRefName(name, "Branch");
+    const data = this._readBranchesFile();
+    data.branches ||= {};
+
+    if (data.branches[name] && !force) {
+      throw new Error(`Branch '${name}' already exists. Use --force to replace it.`);
+    }
+
+    const snapshot = this.getSnapshotByRef(ref);
+    if (!snapshot) {
+      throw new Error(`No snapshot matching '${ref}' found.`);
+    }
+
+    const entry = this._branchEntry(snapshot);
+    data.branches[name] = entry;
+    this._writeBranchesFile(data);
+    return entry;
+  }
+
+  switchBranch(name, { create = false, ref = "HEAD" } = {}) {
+    this._validateRefName(name, "Branch");
+    const data = this._readBranchesFile();
+    data.branches ||= {};
+
+    if (!data.branches[name]) {
+      if (!create) {
+        throw new Error(`Unknown branch '${name}'. Use 'aethel switch -c ${name}' to create it.`);
+      }
+      const snapshot = this.getSnapshotByRef(ref);
+      if (!snapshot) {
+        throw new Error(`No snapshot matching '${ref}' found.`);
+      }
+      data.branches[name] = this._branchEntry(snapshot);
+    }
+
+    data.current = name;
+    this._writeBranchesFile(data);
+    return data.branches[name];
+  }
+
+  deleteBranch(name) {
+    const data = this._readBranchesFile();
+    if ((data.current || "main") === name) {
+      throw new Error(`Cannot delete the current branch '${name}'.`);
+    }
+    if (!data.branches?.[name]) {
+      return false;
+    }
+    delete data.branches[name];
+    this._writeBranchesFile(data);
+    return true;
+  }
+
+  updateCurrentBranch(snapshot) {
+    const data = this._readBranchesFile();
+    const current = data.current || "main";
+    data.branches ||= {};
+    data.branches[current] = this._branchEntry(snapshot);
+    this._writeBranchesFile(data);
+  }
+
+  createTag(name, ref = "HEAD", { force = false } = {}) {
+    this._validateRefName(name, "Tag");
+
+    const data = this._readTagsFile();
+    data.tags ||= {};
+
+    if (data.tags[name] && !force) {
+      throw new Error(`Tag '${name}' already exists. Use --force to replace it.`);
+    }
+
+    const snapshot = this.getSnapshotByRef(ref);
+    if (!snapshot) {
+      throw new Error(`No snapshot matching '${ref}' found.`);
+    }
+
+    const tag = {
+      ref: this.snapshotRef(snapshot),
+      timestamp: snapshot.timestamp || null,
+      message: snapshot.message || "",
+      createdAt: new Date().toISOString(),
+    };
+
+    data.tags[name] = tag;
+    this._writeTagsFile(data);
+    return tag;
+  }
+
+  deleteTag(name) {
+    const data = this._readTagsFile();
+    if (!data.tags?.[name]) {
+      return false;
+    }
+    delete data.tags[name];
+    this._writeTagsFile(data);
+    return true;
+  }
+
   getSnapshotByRef(ref) {
     if (!ref || ref === "HEAD" || ref === "latest") {
       return readLatestSnapshot(this._root);
+    }
+
+    const tag = this.getTags()[ref];
+    if (tag?.ref && tag.ref !== ref) {
+      return this.getSnapshotByRef(tag.ref);
+    }
+
+    const branch = this.getBranches().branches?.[ref];
+    if (branch?.ref && branch.ref !== ref) {
+      return this.getSnapshotByRef(branch.ref);
+    }
+
+    const matchesRef = (snapshot) => {
+      const normalized = this.snapshotRef(snapshot);
+      return normalized.startsWith(ref) || String(snapshot?.timestamp || "").startsWith(ref);
+    };
+
+    const latest = readLatestSnapshot(this._root);
+    if (latest && matchesRef(latest)) {
+      return latest;
     }
 
     const historyPath = path.join(
@@ -337,10 +536,14 @@ export class Repository {
       .sort()
       .reverse();
 
-    const match = files.find((f) => f.startsWith(ref));
-    if (!match) return null;
+    for (const file of files) {
+      const snapshot = JSON.parse(fs.readFileSync(path.join(historyPath, file), "utf-8"));
+      if (file.startsWith(ref) || matchesRef(snapshot)) {
+        return snapshot;
+      }
+    }
 
-    return JSON.parse(fs.readFileSync(path.join(historyPath, match), "utf-8"));
+    return null;
   }
 
   // ── Integrity verification ──────────────────────────────────────────

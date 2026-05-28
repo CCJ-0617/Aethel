@@ -155,6 +155,38 @@ function printChangeDetail(change) {
   }
 }
 
+function printStagedEntries(staged, { verbose = true } = {}) {
+  if (!staged.length) {
+    console.log("No staged changes.");
+    return;
+  }
+
+  if (verbose) {
+    console.log(`\nStaged changes (${staged.length}):`);
+  }
+  for (const entry of staged) {
+    console.log(`  ${entry.action.padStart(15, " ")}  ${entry.path}`);
+  }
+}
+
+function snapshotRef(snapshot) {
+  return String(snapshot.timestamp || "snapshot").replace(/[-:TZ.]/g, "").slice(0, 12);
+}
+
+function snapshotFileCount(snapshot) {
+  return Object.keys(snapshot.files || {}).length;
+}
+
+function snapshotLocalFileCount(snapshot) {
+  return Object.keys(snapshot.localFiles || {}).length;
+}
+
+function printSnapshotStat(snapshot) {
+  const remoteCount = snapshotFileCount(snapshot);
+  const localCount = snapshotLocalFileCount(snapshot);
+  console.log(` ${remoteCount} remote file(s), ${localCount} local file(s)`);
+}
+
 function printCleanerPlan(files, { permanent, execute }) {
   const action = permanent ? "permanently delete" : "move to trash";
   const mode = execute ? "EXECUTION" : "DRY RUN";
@@ -177,6 +209,25 @@ function requireConfirmation(options) {
   }
 }
 
+function parseDriveRemote(remote) {
+  const value = String(remote || "").trim();
+  if (!value || ["my-drive", "root", "drive://root"].includes(value.toLowerCase())) {
+    return null;
+  }
+
+  const folderMatch = value.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (folderMatch) {
+    return folderMatch[1];
+  }
+
+  const queryMatch = value.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (queryMatch) {
+    return queryMatch[1];
+  }
+
+  return value.replace(/^drive:\/\//, "");
+}
+
 async function handleAuth(options) {
   const repo = await openRepo({ ...options, forceAuth: true }, { requireWorkspace: false });
   const spinner = createSpinner("Fetching account info...");
@@ -193,6 +244,194 @@ async function handleAuth(options) {
   console.log(`Authenticated email: ${account.email}`);
   console.log(`Storage usage: ${account.usage}`);
   console.log(`Storage limit: ${account.limit}`);
+}
+
+async function handleClone(remote, directory, options) {
+  const driveFolderId = parseDriveRemote(remote);
+  const displayName = options.driveFolderName || (driveFolderId ? driveFolderId : "My Drive");
+  const localPath = path.resolve(directory || displayName);
+
+  if (!fs.existsSync(localPath)) {
+    await fs.promises.mkdir(localPath, { recursive: true });
+  }
+
+  const root = initWorkspace(localPath, driveFolderId, displayName);
+  createDefaultIgnoreFile(root);
+
+  console.log(`Cloned Drive remote into ${root}`);
+  if (driveFolderId) {
+    console.log(`  Remote: origin -> drive://${driveFolderId}`);
+  } else {
+    console.log("  Remote: origin -> drive://root");
+  }
+
+  if (options.checkout === false) {
+    console.log("  Checkout skipped. Run 'aethel pull --all' inside the workspace to hydrate files.");
+    return;
+  }
+
+  const repo = new Repository(root, {
+    credentials: options.credentials,
+    token: options.token,
+  });
+  const spinner = createSpinner("Connecting to Google Drive...");
+  await repo.connect();
+  spinner.succeed("Connected to Google Drive");
+
+  const fetchSpinner = createSpinner("Fetching remote file list...");
+  const remoteState = await repo.getRemoteState({ useCache: false });
+  fetchSpinner.succeed(`Found ${remoteState.files.length} remote item(s)`);
+
+  if (remoteState.files.length === 0) {
+    await repo.saveSnapshot(options.message || "clone", { remote: remoteState });
+    console.log("Remote is empty. Snapshot saved.");
+    return;
+  }
+
+  const count = repo.stageRemoteFilesForDownload(remoteState.files);
+  console.log(`Staged ${count} remote item(s). Checking out files...`);
+  await handleCommit({ ...options, message: options.message || "clone" }, {
+    repo,
+    snapshotHint: { remote: remoteState },
+  });
+}
+
+function handleRemote(subcommand, args, options) {
+  const root = requireRoot();
+  const repo = new Repository(root);
+  const config = repo.getConfig();
+  const name = options.remoteName || "origin";
+  const driveFolderId = config.drive_folder_id || null;
+  const driveRef = driveFolderId ? `drive://${driveFolderId}` : "drive://root";
+  const displayName = config.drive_folder_name || "My Drive";
+  const command = subcommand || (options.verbose ? "-v" : null);
+
+  if (!command) {
+    console.log(name);
+    return;
+  }
+
+  if (command === "-v" || command === "verbose") {
+    console.log(`${name}\t${driveRef} (fetch)`);
+    console.log(`${name}\t${driveRef} (push)`);
+    return;
+  }
+
+  if (command === "get-url") {
+    const target = args[0] || name;
+    if (target !== name) {
+      throw new Error(`Unknown remote '${target}'. Aethel workspaces expose '${name}'.`);
+    }
+    console.log(driveRef);
+    return;
+  }
+
+  if (command === "show") {
+    const target = args[0] || name;
+    if (target !== name) {
+      throw new Error(`Unknown remote '${target}'. Aethel workspaces expose '${name}'.`);
+    }
+    console.log(`* remote ${name}`);
+    console.log(`  Drive folder: ${displayName}`);
+    console.log(`  Drive ref:    ${driveRef}`);
+    console.log(`  Workspace:    ${root}`);
+    console.log("  Fetch:        aethel fetch / aethel pull");
+    console.log("  Push:         aethel push");
+    return;
+  }
+
+  throw new Error("Usage: aethel remote [-v] | remote show [origin] | remote get-url [origin]");
+}
+
+function handleBranch(args, options) {
+  const root = requireRoot();
+  const repo = new Repository(root);
+  const config = repo.getConfig();
+  const remote = config.drive_folder_id ? `drive://${config.drive_folder_id}` : "drive://root";
+  const state = repo.getBranches();
+
+  if (options.delete) {
+    for (const name of args) {
+      if (repo.deleteBranch(name)) {
+        console.log(`Deleted branch '${name}'.`);
+      } else {
+        console.log(`Branch '${name}' not found.`);
+      }
+    }
+    return;
+  }
+
+  if (args.length > 0) {
+    const [name, ref = "HEAD"] = args;
+    const branch = repo.createBranch(name, ref, { force: Boolean(options.force) });
+    console.log(`Created branch ${name} at ${branch.ref}.`);
+    return;
+  }
+
+  const names = Object.keys(state.branches).sort();
+  for (const name of names) {
+    const marker = name === state.current ? "*" : " ";
+    const branch = state.branches[name] || {};
+    if (options.all || options.verbose) {
+      console.log(`${marker} ${name} ${branch.ref || "(no snapshot)"} ${remote}`);
+    } else {
+      console.log(`${marker} ${name}`);
+    }
+  }
+}
+
+function handleSwitch(branchName, options) {
+  const root = requireRoot();
+  const repo = new Repository(root);
+  const branch = repo.switchBranch(branchName, {
+    create: Boolean(options.create),
+    ref: options.startPoint || "HEAD",
+  });
+
+  console.log(`Switched to branch '${branchName}'.`);
+  if (branch.ref) {
+    console.log(`  Branch points to ${branch.ref}.`);
+    console.log("  Working files are unchanged; run 'aethel restore --source HEAD <path>' or 'aethel pull' when needed.");
+    return;
+  }
+  console.log("  Branch has no snapshot yet.");
+}
+
+function handleTag(args, options) {
+  const root = requireRoot();
+  const repo = new Repository(root);
+  const tags = repo.getTags();
+
+  if (options.delete) {
+    for (const name of args) {
+      if (repo.deleteTag(name)) {
+        console.log(`Deleted tag '${name}'.`);
+      } else {
+        console.log(`Tag '${name}' not found.`);
+      }
+    }
+    return;
+  }
+
+  if (options.list || args.length === 0) {
+    const names = Object.keys(tags).sort();
+    if (!names.length) {
+      return;
+    }
+    for (const name of names) {
+      if (options.verbose) {
+        const tag = tags[name];
+        console.log(`${name.padEnd(20, " ")} ${tag.ref} ${tag.message || ""}`);
+      } else {
+        console.log(name);
+      }
+    }
+    return;
+  }
+
+  const [name, ref = "HEAD"] = args;
+  const tag = repo.createTag(name, ref, { force: Boolean(options.force) });
+  console.log(`Tagged ${tag.ref} as ${name}.`);
 }
 
 async function handleClean(options) {
@@ -304,11 +543,22 @@ async function handleStatus(options) {
     return;
   }
 
-  if (staged.length) {
-    console.log(`\nStaged changes (${staged.length}):`);
+  if (options.short) {
     for (const entry of staged) {
-      console.log(`  ${entry.action.padStart(15, " ")}  ${entry.path}`);
+      console.log(`S  ${entry.action}  ${entry.path}`);
     }
+    const stagedPaths = new Set(staged.map((e) => e.path));
+    for (const change of diff.changes.filter((c) => !stagedPaths.has(c.path))) {
+      console.log(`${change.shortStatus.padEnd(2, " ")} ${change.path}`);
+    }
+    for (const change of [...(diff.pendingPackChanges || []), ...(diff.packConflicts || [])]) {
+      console.log(`${change.shortStatus.padEnd(2, " ")} ${change.path}`);
+    }
+    return;
+  }
+
+  if (staged.length) {
+    printStagedEntries(staged);
   }
 
   const stagedPaths = new Set(staged.map((e) => e.path));
@@ -367,6 +617,12 @@ async function handleStatus(options) {
 async function handleDiff(options) {
   const repo = await openRepo(options);
   const { diff } = await loadStateWithProgress(repo);
+  const staged = repo.getStagedEntries();
+
+  if (options.staged || options.cached) {
+    printStagedEntries(staged);
+    return;
+  }
 
   if (diff.isClean) {
     console.log("No changes detected.");
@@ -402,7 +658,7 @@ async function handleAdd(paths, options) {
   const repo = await openRepo(options);
   const { diff } = await loadStateWithProgress(repo);
 
-  if (options.all) {
+  if (options.all || options.A) {
     const toStage = diff.changes.filter(
       (change) => change.suggestedAction !== "conflict"
     );
@@ -442,14 +698,18 @@ async function handleAdd(paths, options) {
 function handleReset(paths, options) {
   const root = requireRoot();
   const repo = new Repository(root);
+  const resetPaths = [...(paths || [])];
+  if (resetPaths[0] === "HEAD" || resetPaths[0] === "--") {
+    resetPaths.shift();
+  }
 
-  if (options.all) {
+  if (options.all || resetPaths.length === 0) {
     const count = repo.unstageAll();
     console.log(`Unstaged ${count} change(s).`);
     return;
   }
 
-  for (const targetPath of paths || []) {
+  for (const targetPath of resetPaths) {
     if (repo.unstagePath(targetPath)) {
       console.log(`  Unstaged: ${targetPath}`);
       continue;
@@ -505,9 +765,19 @@ function handleLog(options) {
   }
 
   for (const snapshot of entries) {
-    console.log(
-      `  ${snapshot.timestamp || "?"}  ${snapshot.message || "(no message)"}  (${Object.keys(snapshot.files || {}).length} files)`
-    );
+    if (options.oneline) {
+      console.log(`${snapshotRef(snapshot)} ${snapshot.message || "(no message)"}`);
+      continue;
+    }
+
+    console.log(`commit ${snapshotRef(snapshot)}`);
+    console.log(`Date:   ${snapshot.timestamp || "?"}`);
+    console.log(`\n    ${snapshot.message || "(no message)"}`);
+    if (options.stat) {
+      console.log("");
+      printSnapshotStat(snapshot);
+    }
+    console.log("");
   }
 }
 
@@ -698,7 +968,24 @@ async function handleResolve(paths, options) {
   }
 
   // Determine strategy
-  const strategy = options.ours ? "ours" : options.theirs ? "theirs" : options.both ? "both" : null;
+  const keep = options.keep || null;
+  const strategy = options.ours
+    ? "ours"
+    : options.theirs
+      ? "theirs"
+      : options.both
+        ? "both"
+        : keep === "local"
+          ? "ours"
+          : keep === "remote"
+            ? "theirs"
+            : keep === "both"
+              ? "both"
+              : null;
+
+  if (keep && !["local", "remote", "both"].includes(keep)) {
+    throw new Error("--keep must be one of: local, remote, both");
+  }
 
   if (!strategy) {
     console.log(`Conflicts (${conflicts.length}):`);
@@ -709,6 +996,7 @@ async function handleResolve(paths, options) {
     console.log("  aethel resolve --ours [paths...]     Keep local version (upload)");
     console.log("  aethel resolve --theirs [paths...]   Keep remote version (download)");
     console.log("  aethel resolve --both [paths...]     Keep both (remote saved as .remote copy)");
+    console.log("  aethel resolve --keep local [paths...]  Git-style alias for --ours");
     return;
   }
 
@@ -803,11 +1091,22 @@ function handleShow(ref, options) {
     return;
   }
 
+  if (options.oneline) {
+    console.log(`${snapshotRef(snapshot)} ${snapshot.message || "(no message)"}`);
+    return;
+  }
+
   console.log(`Snapshot: ${snapshot.timestamp || "?"}`);
   console.log(`Message:  ${snapshot.message || "(no message)"}`);
 
   const remoteFiles = Object.values(snapshot.files || {});
   const localFiles = Object.keys(snapshot.localFiles || {});
+
+  if (options.stat) {
+    console.log("");
+    printSnapshotStat(snapshot);
+    return;
+  }
 
   console.log(`\nRemote files (${remoteFiles.length}):`);
   if (options.verbose) {
@@ -841,6 +1140,36 @@ function handleShow(ref, options) {
   }
 }
 
+function handleRevParse(refs, options) {
+  const root = requireRoot();
+  const repo = new Repository(root);
+  const targets = refs.length ? refs : ["HEAD"];
+
+  if (options.abbrevRef) {
+    const { current, branches } = repo.getBranches();
+    for (const ref of targets) {
+      if (ref === "HEAD") {
+        console.log(current || "main");
+      } else if (branches[ref]) {
+        console.log(ref);
+      } else {
+        throw new Error(`No branch matching '${ref}' found.`);
+      }
+    }
+    return;
+  }
+
+  for (const ref of targets) {
+    const snapshot = repo.getSnapshotByRef(ref);
+    if (!snapshot) {
+      throw new Error(`No snapshot matching '${ref}' found.`);
+    }
+
+    const resolved = snapshotRef(snapshot);
+    console.log(options.short ? resolved.slice(0, 7) : resolved);
+  }
+}
+
 function formatCliError(error) {
   const message =
     error instanceof Error
@@ -860,14 +1189,25 @@ function formatCliError(error) {
 }
 
 async function handleRestore(paths, options) {
-  const repo = await openRepo(options);
-  const snapshot = repo.getSnapshot();
-
-  if (!snapshot) {
-    console.log("No snapshot to restore from. Run 'aethel commit' first.");
+  if (options.staged) {
+    handleReset(paths, { all: paths.length === 0 });
     return;
   }
 
+  const source = options.source || "HEAD";
+  const localRepo = new Repository(requireRoot());
+  const snapshot = localRepo.getSnapshotByRef(source);
+
+  if (!snapshot) {
+    if (source === "HEAD" || source === "latest") {
+      console.log("No snapshot to restore from. Run 'aethel commit' first.");
+    } else {
+      console.log(`No snapshot matching '${source}' found.`);
+    }
+    return;
+  }
+
+  const repo = await openRepo(options);
   const root = repo.root;
   const remoteFiles = snapshot.files || {};
 
@@ -898,6 +1238,33 @@ async function handleRestore(paths, options) {
       spinner.fail(`Failed to restore ${targetPath}: ${err.message}`);
     }
   }
+}
+
+async function handleCheckout(args, options) {
+  const targets = [...(args || [])];
+  if (targets[0] === "--") {
+    targets.shift();
+  }
+
+  if (options.branch) {
+    handleSwitch(options.branch, { create: true, startPoint: targets[0] || "HEAD" });
+    return;
+  }
+
+  if (targets.length === 1) {
+    const root = requireRoot();
+    const repo = new Repository(root);
+    if (repo.getBranches().branches[targets[0]]) {
+      handleSwitch(targets[0], { create: false });
+      return;
+    }
+  }
+
+  if (targets.length === 0) {
+    throw new Error("checkout requires a branch name, -b <branch>, or path.");
+  }
+
+  await handleRestore(targets, { ...options, source: "HEAD" });
 }
 
 async function handleRm(paths, options) {
@@ -1163,7 +1530,7 @@ async function main() {
 
   program
     .name("aethel")
-    .version(versionString, "-v, --version")
+    .version(versionString, "--version")
     .description("Git-like Google Drive sync management and cleanup")
     .showHelpAfterError();
 
@@ -1172,6 +1539,17 @@ async function main() {
       .command("auth")
       .description("Run OAuth initialization and verify Google Drive access")
   ).action(handleAuth);
+
+  addAuthOptions(
+    program
+      .command("clone")
+      .description("Clone a Drive folder into a new Aethel workspace")
+      .argument("<drive-folder>", "Drive folder ID, Drive folder URL, or my-drive")
+      .argument("[directory]", "Directory to create")
+      .option("--drive-folder-name <name>", "Display name for the Drive folder")
+      .option("--no-checkout", "Create the workspace without downloading files")
+      .option("-m, --message <message>", "Snapshot message", "clone")
+  ).action((remote, directory, options) => handleClone(remote, directory, options));
 
   addAuthOptions(
     program
@@ -1195,6 +1573,7 @@ async function main() {
   addAuthOptions(
     program.command("status").description("Show sync status")
       .option("-v, --verbose", "Show all pack states including synced")
+      .option("-s, --short", "Give the output in short format")
   ).action(handleStatus);
 
   addAuthOptions(
@@ -1202,6 +1581,8 @@ async function main() {
       .command("diff")
       .description("Show detailed changes")
       .option("--side <side>", "Which side to show: remote, local, or all", "all")
+      .option("--staged", "Show staged sync operations")
+      .option("--cached", "Alias for --staged")
   ).action(handleDiff);
 
   addAuthOptions(
@@ -1210,12 +1591,13 @@ async function main() {
       .description("Stage changes for commit")
       .argument("[paths...]", "Paths or glob patterns to stage")
       .option("--all, -a", "Stage all changes")
+      .option("-A", "Alias for --all")
   ).action((paths, options) => handleAdd(paths, options));
 
   program
     .command("reset")
     .description("Unstage changes")
-    .argument("[paths...]", "Paths to unstage")
+    .argument("[paths...]", "Paths to unstage; accepts optional HEAD like git reset HEAD <path>")
     .option("--all", "Unstage everything")
     .action((paths, options) => handleReset(paths, options));
 
@@ -1230,7 +1612,46 @@ async function main() {
     .command("log")
     .description("Show commit history")
     .option("-n, --limit <number>", "Number of entries to show", Number, 10)
+    .option("--oneline", "Show one compact line per snapshot")
+    .option("--stat", "Show snapshot file counts")
     .action(handleLog);
+
+  program
+    .command("branch")
+    .description("List, create, or delete Aethel branch refs")
+    .argument("[args...]", "Branch name and optional start point")
+    .option("-a, --all", "Show all known branches")
+    .option("-v, --verbose", "Show branch remote target")
+    .option("-d, --delete", "Delete branches")
+    .option("-f, --force", "Replace an existing branch when creating")
+    .action((args, options) => handleBranch(args, options));
+
+  program
+    .command("switch")
+    .description("Switch Aethel's current branch ref")
+    .argument("<branch>", "Branch to switch to")
+    .argument("[start-point]", "Snapshot ref for -c")
+    .option("-c, --create", "Create the branch before switching")
+    .action((branch, startPoint, options) => handleSwitch(branch, { ...options, startPoint }));
+
+  program
+    .command("tag")
+    .description("Create, list, or delete snapshot tags")
+    .argument("[args...]", "Tag name and optional snapshot ref")
+    .option("-l, --list", "List tags")
+    .option("-d, --delete", "Delete tags")
+    .option("-f, --force", "Replace an existing tag")
+    .option("-v, --verbose", "Show tag refs and messages")
+    .action((args, options) => handleTag(args, options));
+
+  program
+    .command("remote")
+    .description("Manage or inspect the Drive remote")
+    .argument("[subcommand]", "show, get-url, or omitted")
+    .argument("[args...]", "Remote arguments")
+    .option("-v, --verbose", "Show fetch and push URLs")
+    .option("--remote-name <name>", "Remote name to display", "origin")
+    .action((subcommand, args, options) => handleRemote(subcommand, args, options));
 
   addAuthOptions(program.command("fetch").description("Check remote state")).action(
     handleFetch
@@ -1276,6 +1697,7 @@ async function main() {
       .command("resolve")
       .description("Resolve file conflicts")
       .argument("[paths...]", "Conflicted paths to resolve (default: all)")
+      .option("--keep <side>", "Git-style conflict choice: local, remote, or both")
       .option("--ours", "Keep local version (upload to Drive)")
       .option("--theirs", "Keep remote version (download from Drive)")
       .option("--both", "Keep both versions (remote saved as .remote copy)")
@@ -1291,16 +1713,36 @@ async function main() {
   program
     .command("show")
     .description("Show details of a commit/snapshot")
-    .argument("[ref]", "Snapshot reference (HEAD, latest, or timestamp prefix)", "HEAD")
+    .argument("[ref]", "Snapshot reference (HEAD, branch, tag, or timestamp prefix)", "HEAD")
     .option("-v, --verbose", "Show all files with checksums")
+    .option("--stat", "Show snapshot file counts")
+    .option("--oneline", "Show compact snapshot summary")
     .action((ref, options) => handleShow(ref, options));
+
+  program
+    .command("rev-parse")
+    .description("Resolve branch, tag, or snapshot refs")
+    .argument("[refs...]", "Refs to resolve (default: HEAD)")
+    .option("--abbrev-ref", "Show the branch name for HEAD or branch refs")
+    .option("--short", "Show a short snapshot ref")
+    .action((refs, options) => handleRevParse(refs, options));
 
   addAuthOptions(
     program
       .command("restore")
-      .description("Restore file(s) from the last snapshot")
+      .description("Restore file(s) from a snapshot")
+      .option("--source <ref>", "Snapshot source to restore from (HEAD, branch, tag, or timestamp)", "HEAD")
+      .option("--staged", "Unstage paths instead of restoring files")
       .argument("<paths...>", "Paths to restore")
   ).action((paths, options) => handleRestore(paths, options));
+
+  addAuthOptions(
+    program
+      .command("checkout")
+      .description("Switch branches or restore paths from HEAD")
+      .argument("[args...]", "Branch name, -b branch, or paths to restore")
+      .option("-b, --branch <branch>", "Create and switch to a new branch")
+  ).action((args, options) => handleCheckout(args, options));
 
   addAuthOptions(
     program
