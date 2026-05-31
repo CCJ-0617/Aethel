@@ -60,7 +60,7 @@
     "commander": "^14.0.3",
     "googleapis": "^172.0.0",
     "ignore": "^7.0.5",
-    "ink": "^5.2.1",
+    "ink": "^7.0.5",
     "ink-select-input": "^6.0.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
