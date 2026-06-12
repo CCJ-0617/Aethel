@@ -9,6 +9,7 @@ token.json
 client_secret*.json
 .env
 .env.*
+!.env.example
 
 # Python artifacts
 .venv/

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +13,7 @@ test("package files entries exist before npm packing", async () => {
   );
 
   const missingEntries = [];
+  const ignoredEntries = [];
 
   for (const entry of packageJson.files ?? []) {
     const normalizedEntry = entry.replace(/\/$/, "");
@@ -20,7 +22,17 @@ test("package files entries exist before npm packing", async () => {
     } catch {
       missingEntries.push(entry);
     }
+
+    const ignored = spawnSync(
+      "git",
+      ["check-ignore", "--quiet", normalizedEntry],
+      { cwd: root }
+    );
+    if (ignored.status === 0) {
+      ignoredEntries.push(entry);
+    }
   }
 
   assert.deepEqual(missingEntries, []);
+  assert.deepEqual(ignoredEntries, []);
 });
