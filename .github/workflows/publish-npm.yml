@@ -1,6 +1,8 @@
 name: Publish to npm (manual)
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -13,6 +15,7 @@ permissions:
 
 jobs:
   publish:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[publish-npm]')
     runs-on: ubuntu-latest
     environment: npm
     steps:
