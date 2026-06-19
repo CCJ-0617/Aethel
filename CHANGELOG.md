@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1 (2026-06-19)
+
+- Fix local deletions for staged directory paths that are missing folder
+  metadata by checking the filesystem before deleting.
+- Report unsupported Google Workspace downloads clearly instead of attempting a
+  binary Drive media download and surfacing a raw 403.
+
 ## 1.3.0 (2026-06-19)
 
 - Add `clean --ignored` to dry-run or trash Drive files and folders that match

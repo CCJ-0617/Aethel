@@ -659,6 +659,13 @@ export async function downloadFile(drive, fileMeta, localPath) {
     return;
   }
 
+  if (isWorkspaceType(mime)) {
+    throw new Error(
+      `Cannot download Google Workspace file '${fileMeta.name || fileMeta.id}' ` +
+        `with unsupported mimeType '${mime}'`
+    );
+  }
+
   // Stream to disk while computing MD5 in parallel
   const { createHash } = await import("node:crypto");
   const md5 = createHash("md5");

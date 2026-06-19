@@ -137,19 +137,25 @@ async function deleteLocalFile(entry, root) {
   const localRelativePath = entry.localPath || entry.path;
   const localAbsolutePath = toLocalAbsolutePath(root, localRelativePath);
 
-  if (!fs.existsSync(localAbsolutePath)) {
+  let stat;
+  try {
+    stat = await fs.promises.lstat(localAbsolutePath);
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      return;
+    }
+    throw err;
+  }
+
+  if (stat.isDirectory()) {
+    await fs.promises.rmdir(localAbsolutePath);
     return;
   }
 
-  // Empty folder: remove the directory itself
-  if (entry.isFolder) {
-    await fs.promises.rmdir(localAbsolutePath);
-  } else {
-    await fs.promises.unlink(localAbsolutePath);
-  }
+  await fs.promises.unlink(localAbsolutePath);
 
   // Clean up empty parent directories up to workspace root
-  let currentPath = entry.isFolder ? localAbsolutePath : path.dirname(localAbsolutePath);
+  let currentPath = path.dirname(localAbsolutePath);
   const resolvedRoot = path.resolve(root);
 
   while (currentPath !== resolvedRoot) {
@@ -161,6 +167,24 @@ async function deleteLocalFile(entry, root) {
       break;
     }
     currentPath = path.dirname(currentPath);
+  }
+}
+
+async function isLocalDirectoryEntry(entry, root) {
+  if (entry.isFolder) {
+    return true;
+  }
+
+  const localRelativePath = entry.localPath || entry.path;
+  const localAbsolutePath = toLocalAbsolutePath(root, localRelativePath);
+
+  try {
+    return (await fs.promises.lstat(localAbsolutePath)).isDirectory();
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      return false;
+    }
+    throw err;
   }
 }
 
@@ -263,10 +287,19 @@ export async function executeStaged(drive, root, progress) {
 
   // Run local file deletes before folder deletes so a remote-deleted tree can
   // be removed without reporting non-empty folders as successful deletions.
-  const localFileDeletes = localDeletes.filter(({ entry }) => !entry.isFolder);
-  const localFolderDeletes = localDeletes
-    .filter(({ entry }) => entry.isFolder)
-    .sort((left, right) => right.entry.path.split("/").length - left.entry.path.split("/").length);
+  // Older staged entries may not carry isFolder, so classify from disk too.
+  const localFileDeletes = [];
+  const localFolderDeletes = [];
+  for (const localDelete of localDeletes) {
+    if (await isLocalDirectoryEntry(localDelete.entry, root)) {
+      localFolderDeletes.push(localDelete);
+    } else {
+      localFileDeletes.push(localDelete);
+    }
+  }
+  localFolderDeletes.sort(
+    (left, right) => right.entry.path.split("/").length - left.entry.path.split("/").length
+  );
 
   await Promise.all(
     localFileDeletes.map(async ({ entry }) => {

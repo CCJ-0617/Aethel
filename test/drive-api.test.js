@@ -13,6 +13,7 @@ import {
   listIgnoredRemoteItems,
   resetFolderLookupCache,
   syncLocalDirectoryToParent,
+  downloadFile,
   uploadFile,
   uploadLocalEntry,
 } from "../src/core/drive-api.js";
@@ -603,6 +604,67 @@ test("executeStaged keeps non-empty local folder deletions staged on failure", a
     assert.match(result.errors[0], /delete_local docs:/);
     await fs.stat(path.join(workspaceRoot, "docs", "keep.txt"));
     assert.equal(readIndex(workspaceRoot).staged.length, 1);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("executeStaged deletes an empty local directory even when folder metadata is missing", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    await fs.mkdir(path.join(workspaceRoot, "docs"), { recursive: true });
+
+    writeIndex(workspaceRoot, {
+      staged: [
+        {
+          action: "delete_local",
+          path: "docs",
+          localPath: "docs",
+        },
+      ],
+    });
+
+    const result = await executeStaged({ files: {} }, workspaceRoot);
+
+    assert.equal(result.deletedLocal, 1);
+    assert.deepEqual(result.errors, []);
+    await assert.rejects(fs.stat(path.join(workspaceRoot, "docs")), { code: "ENOENT" });
+    assert.equal(readIndex(workspaceRoot).staged.length, 0);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("downloadFile rejects unsupported Google Workspace files before media download", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-download-"));
+
+  try {
+    const localPath = path.join(workspaceRoot, ".claude");
+    const drive = {
+      files: {
+        async get() {
+          throw new Error("alt media should not be called for Google Workspace files");
+        },
+        async export() {
+          throw new Error("unsupported type should not be exported");
+        },
+      },
+    };
+
+    await assert.rejects(
+      downloadFile(
+        drive,
+        {
+          id: "workspace-file",
+          name: ".claude",
+          mimeType: "application/vnd.google-apps.script",
+        },
+        localPath
+      ),
+      /Cannot download Google Workspace file '.claude'/
+    );
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }
