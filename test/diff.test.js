@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ChangeType, computeDiff } from "../src/core/diff.js";
+import {
+  ChangeType,
+  computeDiff,
+  changesWithLocalAuthority,
+} from "../src/core/diff.js";
 
 test("computeDiff carries snapshot Drive IDs for local changes", () => {
   const snapshot = {
@@ -181,6 +185,104 @@ test("computeDiff downloads remote snapshot entries that are absent from the loc
   assert.equal(diff.changes[0].path, "Planning/Atlas/note.md");
   assert.equal(diff.changes[0].fileId, "remote-only");
   assert.equal(diff.changes[0].suggestedAction, "download");
+});
+
+test("changesWithLocalAuthority converts remote-only additions into remote deletes", () => {
+  const remoteOnly = {
+    changeType: ChangeType.REMOTE_ADDED,
+    path: "docs/remote-only.md",
+    fileId: "remote-only",
+    remoteMeta: { id: "remote-only", path: "docs/remote-only.md" },
+    localMeta: null,
+    snapshotMeta: null,
+    shortStatus: "+R",
+    description: "new on Drive",
+    suggestedAction: "download",
+  };
+
+  const changes = changesWithLocalAuthority([remoteOnly]);
+
+  assert.deepEqual(changes, [
+    {
+      changeType: ChangeType.LOCAL_DELETED,
+      path: "docs/remote-only.md",
+      fileId: "remote-only",
+      remoteMeta: { id: "remote-only", path: "docs/remote-only.md" },
+      localMeta: null,
+      snapshotMeta: null,
+      shortStatus: "-L",
+      description: "deleted locally",
+      suggestedAction: "delete_remote",
+    },
+  ]);
+});
+
+test("changesWithLocalAuthority collapses remote-only paths to missing local ancestors", () => {
+  const remoteOnly = {
+    changeType: ChangeType.REMOTE_ADDED,
+    path: "docs/generated/build/output.o",
+    fileId: "remote-child",
+    remoteMeta: { id: "remote-child", path: "docs/generated/build/output.o" },
+    localMeta: null,
+    snapshotMeta: null,
+    shortStatus: "+R",
+    description: "new on Drive",
+    suggestedAction: "download",
+  };
+  const existingPaths = new Set(["docs"]);
+
+  const changes = changesWithLocalAuthority([remoteOnly], {
+    pathExists: (candidate) => existingPaths.has(candidate),
+  });
+
+  assert.deepEqual(changes, [
+    {
+      changeType: ChangeType.LOCAL_DELETED,
+      path: "docs/generated",
+      fileId: null,
+      remoteMeta: null,
+      localMeta: null,
+      snapshotMeta: null,
+      shortStatus: "-L",
+      description: "deleted locally",
+      suggestedAction: "delete_remote",
+    },
+  ]);
+});
+
+test("changesWithLocalAuthority deduplicates collapsed remote deletes", () => {
+  const remoteChanges = [
+    {
+      changeType: ChangeType.REMOTE_ADDED,
+      path: "docs/generated/build/a.o",
+      fileId: "remote-a",
+      remoteMeta: { id: "remote-a", path: "docs/generated/build/a.o" },
+      localMeta: null,
+      snapshotMeta: null,
+      shortStatus: "+R",
+      description: "new on Drive",
+      suggestedAction: "download",
+    },
+    {
+      changeType: ChangeType.REMOTE_ADDED,
+      path: "docs/generated/build/b.o",
+      fileId: "remote-b",
+      remoteMeta: { id: "remote-b", path: "docs/generated/build/b.o" },
+      localMeta: null,
+      snapshotMeta: null,
+      shortStatus: "+R",
+      description: "new on Drive",
+      suggestedAction: "download",
+    },
+  ];
+  const existingPaths = new Set(["docs"]);
+
+  const changes = changesWithLocalAuthority(remoteChanges, {
+    pathExists: (candidate) => existingPaths.has(candidate),
+  });
+
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].path, "docs/generated");
 });
 
 test("computeDiff conflicts when remote baseline-only file differs from local file", () => {

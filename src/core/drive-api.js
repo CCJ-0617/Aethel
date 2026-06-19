@@ -380,6 +380,77 @@ function buildRemoteFiles(folders, rawFiles, rootFolderId = null) {
   return files;
 }
 
+function buildRemoteItems(folders, rawFiles, rootFolderId = null) {
+  const resolve = createFolderResolver(folders, rootFolderId);
+  const isOrphaned = createOrphanChecker(folders);
+  const items = [];
+
+  for (const folder of folders.values()) {
+    if (folder.id === "root" || folder.id === rootFolderId) continue;
+    if (isOrphaned(folder.id)) continue;
+
+    const folderPath = resolve(folder.id);
+    if (rootFolderId && folderPath === null) continue;
+    if (!folderPath) continue;
+
+    items.push({
+      id: folder.id,
+      name: folder.name,
+      path: folderPath,
+      mimeType: FOLDER_MIME,
+      size: null,
+      modifiedTime: folder.modifiedTime || null,
+      md5Checksum: null,
+      isFolder: true,
+    });
+  }
+
+  for (const file of rawFiles) {
+    const parentId = file.parents?.[0] || "";
+    if (parentId && isOrphaned(parentId)) continue;
+
+    const parentPath = parentId === rootFolderId ? "" : resolve(parentId);
+    if (rootFolderId && parentPath === null) continue;
+
+    items.push({
+      id: file.id,
+      name: file.name,
+      path: parentPath ? path.posix.join(parentPath, file.name) : file.name,
+      mimeType: file.mimeType || "",
+      size: file.size || null,
+      modifiedTime: file.modifiedTime || null,
+      md5Checksum: file.md5Checksum || null,
+    });
+  }
+
+  return items.sort((left, right) => {
+    const depthDiff = folderPathDepth(left.path) - folderPathDepth(right.path);
+    if (depthDiff !== 0) return depthDiff;
+    return left.path.localeCompare(right.path);
+  });
+}
+
+export async function listIgnoredRemoteItems(
+  drive,
+  rootFolderId = null,
+  ignoreRules,
+  { includeSharedDrives = false } = {}
+) {
+  const { folders, files } = await fetchAllItems(drive, { includeSharedDrives });
+  const items = buildRemoteItems(folders, files, rootFolderId);
+  const ignored = [];
+
+  for (const item of items) {
+    if (!ignoreRules?.ignores?.(item.path)) continue;
+    if (ignored.some((parent) => item.path.startsWith(`${parent.path}/`))) {
+      continue;
+    }
+    ignored.push(item);
+  }
+
+  return ignored;
+}
+
 function buildDuplicateFolderGroups(folders, rootFolderId = null, ignoreRules = null) {
   const resolve = createFolderResolver(folders, rootFolderId);
   const groups = new Map();
@@ -854,6 +925,34 @@ export async function ensureFolder(drive, folderPath, rootId = null) {
   }
 
   return parent;
+}
+
+export async function findRemoteItemByPath(drive, remotePath, rootId = null) {
+  const parts = String(remotePath || "").split("/").filter(Boolean);
+  if (!parts.length) {
+    return null;
+  }
+
+  let parent = rootId || "root";
+
+  for (const [index, part] of parts.entries()) {
+    const isLast = index === parts.length - 1;
+    const item = isLast
+      ? pickCanonicalItem(await listMatchingChildren(drive, parent, part))
+      : await resolveCanonicalFolder(drive, parent, part, false);
+
+    if (!item) {
+      return null;
+    }
+
+    if (!isLast) {
+      parent = item.id;
+    } else {
+      return item;
+    }
+  }
+
+  return null;
 }
 
 export async function trashFile(drive, fileId) {

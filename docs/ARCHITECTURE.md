@@ -34,6 +34,7 @@ The core design is not a live mirror between local storage and Drive. Instead, s
 - `src/core/drive-api.js`
   - Google Drive API wrapper
   - Listing, downloading, uploading, deleting, folder creation, and batch operations
+  - Ignore-aware remote cleanup helpers for `clean --ignored`
 - `src/core/local-fs.js`
   - Local filesystem operations
 - `src/core/snapshot.js`
@@ -167,6 +168,10 @@ It also provides default suggested actions for each category:
 - Both sides changed the same path -> `conflict`
 - Pack new/local modified -> `push_pack`
 - Pack remote modified -> `pull_pack`
+
+When `push --force` is used, local state is authoritative. Drive-only additions
+are converted into `delete_remote` operations, collapsed to the highest missing
+local ancestor, and deduplicated so removed folder trees are pruned in one pass.
 - Pack conflict -> `resolve_pack`
 
 ### 4.3 Execution Model
@@ -230,7 +235,18 @@ This is the most reasonable standard flow because:
 
 This preserves a manual confirmation point and helps avoid pushing a bad state to Drive or overwriting local files by mistake.
 
-### 6.1 Refs
+### 6.3 Cleanup Workflows
+
+`clean` is a remote maintenance command. Its default mode lists accessible
+Drive files and can trash/delete them with the broad confirmation phrase.
+
+`clean --ignored` is workspace-scoped. It reads the workspace `.aethelignore`,
+lists items under the configured Drive sync root, filters remote paths through
+the ignore rules, and reports only the topmost ignored files/folders. Execution
+requires the narrower confirmation phrase `DELETE IGNORED GOOGLE DRIVE FILES`
+and invalidates the remote cache after completion.
+
+### 6.4 Refs
 
 Aethel branch refs are stored under `.aethel/refs/branches.json`. Each branch
 points at a snapshot ref, and the current branch is advanced when a new sync
@@ -240,7 +256,7 @@ under `.aethel/refs/tags.json` and point at snapshot refs, so `show`,
 `rev-parse`, and `restore --source <ref>` can use memorable names without
 changing Drive state.
 
-### 6.3 When Conflicts Occur
+### 6.5 When Conflicts Occur
 
 Recommended flow:
 

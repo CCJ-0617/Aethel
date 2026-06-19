@@ -84,6 +84,49 @@ function createChange({
   };
 }
 
+function topmostMissingPath(remotePath, pathExists) {
+  if (!pathExists) {
+    return remotePath;
+  }
+
+  const parts = String(remotePath || "").split("/").filter(Boolean);
+  const prefixes = [];
+
+  for (const part of parts) {
+    prefixes.push(part);
+    const candidate = prefixes.join("/");
+    if (!pathExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return remotePath;
+}
+
+export function changesWithLocalAuthority(changes, { pathExists } = {}) {
+  const converted = changes.map((change) => {
+    if (change.changeType !== ChangeType.REMOTE_ADDED) {
+      return change;
+    }
+
+    const deletePath = topmostMissingPath(change.path, pathExists);
+    const collapsed = deletePath !== change.path;
+
+    return createChange({
+      changeType: ChangeType.LOCAL_DELETED,
+      path: deletePath,
+      fileId: collapsed ? null : change.fileId,
+      remoteMeta: collapsed ? null : change.remoteMeta,
+      localMeta: change.localMeta,
+      snapshotMeta: change.snapshotMeta,
+    });
+  });
+
+  return [...new Map(
+    converted.map((change) => [`${change.suggestedAction}:${change.path}`, change])
+  ).values()];
+}
+
 function buildDiffResult(changes, packChanges = []) {
   return {
     changes,

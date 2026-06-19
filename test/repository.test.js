@@ -193,6 +193,26 @@ test("unstageAll clears all staged entries", () => {
   }
 });
 
+test("commitStaged does not save a snapshot when sync has errors", async () => {
+  const root = makeTmpWorkspace();
+  try {
+    const repo = new Repository(root, { drive: { files: {} } });
+    repo.stageChange({
+      path: "missing.exe",
+      suggestedAction: "upload",
+      localMeta: { localPath: "missing.exe" },
+    });
+
+    const result = await repo.commitStaged({ message: "partial sync" });
+
+    assert.equal(result.errors.length, 1);
+    assert.equal(repo.getSnapshot(), null);
+    assert.equal(repo.getStagedEntries().length, 1);
+  } finally {
+    cleanup(root);
+  }
+});
+
 // ── History ──
 
 test("getHistory returns empty array when no snapshots", () => {

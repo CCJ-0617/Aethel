@@ -25,7 +25,7 @@ import {
   initWorkspace,
   requireRoot,
 } from "./core/config.js";
-import { ChangeType } from "./core/diff.js";
+import { ChangeType, changesWithLocalAuthority } from "./core/diff.js";
 import {
   dedupeDuplicateFiles,
   dedupeDuplicateFolders,
@@ -34,9 +34,11 @@ import {
 import { createDefaultIgnoreFile, loadIgnoreRules } from "./core/ignore.js";
 import { createProgressBar, createSpinner } from "./core/progress.js";
 import { Repository } from "./core/repository.js";
+import { remoteCacheEnabledByDefault } from "./core/sync-cache-policy.js";
 import { runTui } from "./tui/index.js";
 
 const REQUIRED_CONFIRMATION = "DELETE ALL MY GOOGLE DRIVE FILES";
+const REQUIRED_IGNORED_CONFIRMATION = "DELETE IGNORED GOOGLE DRIVE FILES";
 
 function addAuthOptions(command) {
   return command
@@ -193,18 +195,18 @@ function printCleanerPlan(files, { permanent, execute }) {
 
   console.log(`${mode}: the script will ${action} ${files.length} file(s).`);
   for (const file of files) {
-    console.log(`- ${file.name} | id=${file.id} | mimeType=${file.mimeType}`);
+    console.log(`- ${file.path || file.name} | id=${file.id} | mimeType=${file.mimeType}`);
   }
 }
 
-function requireConfirmation(options) {
+function requireConfirmation(options, phrase = REQUIRED_CONFIRMATION) {
   if (!options.execute) {
     return;
   }
 
-  if (options.confirm !== REQUIRED_CONFIRMATION) {
+  if (options.confirm !== phrase) {
     throw new Error(
-      `The confirmation phrase is incorrect. Pass --confirm "${REQUIRED_CONFIRMATION}" to execute.`
+      `The confirmation phrase is incorrect. Pass --confirm "${phrase}" to execute.`
     );
   }
 }
@@ -435,16 +437,32 @@ function handleTag(args, options) {
 }
 
 async function handleClean(options) {
-  requireConfirmation(options);
-  const repo = await openRepo(options, { requireWorkspace: false });
-  const spinner = createSpinner("Listing remote files...");
-  const files = await repo.listRemoteFiles({ includeSharedDrives: Boolean(options.sharedDrives) });
-  spinner.succeed(`Found ${files.length} file(s) on Drive`);
+  const ignoredMode = Boolean(options.ignored);
+  requireConfirmation(
+    options,
+    ignoredMode ? REQUIRED_IGNORED_CONFIRMATION : REQUIRED_CONFIRMATION
+  );
+  const repo = await openRepo(options, { requireWorkspace: ignoredMode });
+  const spinner = createSpinner(
+    ignoredMode ? "Listing ignored remote files..." : "Listing remote files..."
+  );
+  const files = ignoredMode
+    ? await repo.listIgnoredRemoteItems(loadIgnoreRules(repo.root), {
+        includeSharedDrives: Boolean(options.sharedDrives),
+      })
+    : await repo.listRemoteFiles({ includeSharedDrives: Boolean(options.sharedDrives) });
+  spinner.succeed(
+    ignoredMode
+      ? `Found ${files.length} ignored file(s) on Drive`
+      : `Found ${files.length} file(s) on Drive`
+  );
 
   printCleanerPlan(files, options);
 
   if (files.length === 0) {
-    console.log("No non-trashed files were found.");
+    console.log(ignoredMode
+      ? "No ignored non-trashed files were found."
+      : "No non-trashed files were found.");
     return;
   }
 
@@ -468,6 +486,9 @@ async function handleClean(options) {
   }
 
   console.log("Operation completed.");
+  if (ignoredMode) {
+    repo.invalidateRemoteCache();
+  }
 }
 
 async function handleInit(options) {
@@ -533,7 +554,9 @@ async function handleInit(options) {
 
 async function handleStatus(options) {
   const repo = await openRepo(options);
-  const { diff } = await loadStateWithProgress(repo);
+  const { diff } = await loadStateWithProgress(repo, {
+    useCache: remoteCacheEnabledByDefault("status"),
+  });
   const staged = repo.getStagedEntries();
 
   const hasPackChanges = diff.hasPackChanges || (options.verbose && diff.syncedPacks?.length > 0);
@@ -656,7 +679,9 @@ async function handleDiff(options) {
 
 async function handleAdd(paths, options) {
   const repo = await openRepo(options);
-  const { diff } = await loadStateWithProgress(repo);
+  const { diff } = await loadStateWithProgress(repo, {
+    useCache: remoteCacheEnabledByDefault("add"),
+  });
 
   if (options.all || options.A) {
     const toStage = diff.changes.filter(
@@ -740,6 +765,8 @@ async function handleCommit(options, { repo: existingRepo, snapshotHint } = {}) 
     for (const error of result.errors) {
       console.log(`  ERROR: ${error}`);
     }
+    console.log("Snapshot not saved because some staged changes failed.");
+    return;
   }
 
   const snapshotStart = Date.now();
@@ -822,7 +849,9 @@ async function handleFetch(options) {
 
 async function handlePull(paths, options) {
   const repo = await openRepo(options);
-  const { diff, remoteState } = await loadStateWithProgress(repo, { useCache: false });
+  const { diff, remoteState } = await loadStateWithProgress(repo, {
+    useCache: remoteCacheEnabledByDefault("pull"),
+  });
 
   if (options.all) {
     let remoteFiles = remoteState.files;
@@ -906,7 +935,9 @@ async function handlePull(paths, options) {
 
 async function handlePush(paths, options) {
   const repo = await openRepo(options);
-  const { diff, local } = await loadStateWithProgress(repo, { useCache: false });
+  const { diff, local } = await loadStateWithProgress(repo, {
+    useCache: remoteCacheEnabledByDefault("push"),
+  });
 
   let localChanges = diff.changes.filter((change) =>
     [
@@ -917,6 +948,17 @@ async function handlePush(paths, options) {
   );
 
   if (options.force) {
+    const remoteAdditions = diff.remoteChanges.filter(
+      (change) => change.changeType === ChangeType.REMOTE_ADDED
+    );
+    localChanges = [
+      ...localChanges,
+      ...changesWithLocalAuthority(remoteAdditions, {
+        pathExists: (relativePath) =>
+          fs.existsSync(path.join(repo.root, ...relativePath.split("/"))),
+      }),
+    ];
+
     const conflicts = diff.conflicts;
     if (conflicts.length) {
       console.log(`Force-pushing ${conflicts.length} conflict(s) (local wins)...`);
@@ -1555,6 +1597,7 @@ async function main() {
     program
       .command("clean")
       .description("List accessible Drive files and optionally trash or delete them")
+      .option("--ignored", "Only clean remote files that match this workspace's .aethelignore")
       .option("--shared-drives", "Include shared drives")
       .option("--permanent", "Permanently delete files instead of moving them to trash")
       .option("--execute", "Execute the selected operation")

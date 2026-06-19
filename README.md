@@ -94,6 +94,7 @@ aethel fetch                   # refresh remote state without applying
 aethel pull -m "pull"          # fetch remote changes and apply
 aethel pull --all              # download the full remote tree to local
 aethel push -m "push"          # push local changes to Drive
+aethel clean --ignored         # dry-run cleanup for Drive files matching .aethelignore
 aethel log --oneline           # compact sync history
 aethel show --stat HEAD        # snapshot summary
 aethel rev-parse --short HEAD  # resolve snapshot refs
@@ -144,7 +145,7 @@ Processes deepest-first for single-pass convergence, caches child state to minim
 | `tag`            | Create, list, or delete snapshot tags                               |
 | `remote`         | Inspect the Drive remote (`remote -v`, `remote show origin`)        |
 | `pull`           | Fetch and apply remote changes (`--all` for full remote download) |
-| `push`           | Push local changes to Drive                                         |
+| `push`           | Push local changes to Drive (`--force` makes local state authoritative) |
 | `log`            | Sync history                                                        |
 | `fetch`          | Refresh remote state without applying                               |
 | `resolve`        | Resolve conflicts (local / remote / both)                           |
@@ -156,7 +157,7 @@ Processes deepest-first for single-pass convergence, caches child state to minim
 | `rm`             | Remove local files and stage remote deletion                        |
 | `mv`             | Move or rename local files                                          |
 | `verify`         | Verify local and optional remote integrity against the last snapshot |
-| `clean`          | List and optionally trash/delete Drive files                        |
+| `clean`          | List and optionally trash/delete Drive files (`--ignored` for .aethelignore cleanup) |
 | `dedupe-folders` | Detect and merge duplicate remote folders                           |
 | `dedupe-files`   | Detect and remove duplicate remote files                            |
 | `tui`            | Launch interactive terminal UI                                      |
@@ -285,6 +286,19 @@ __pycache__/
 dist/
 build/
 ```
+
+Ignored paths are skipped by normal sync scans. If ignored build artifacts or
+cache files already exist on Drive, use `clean --ignored` to remove them from
+the configured Drive sync root:
+
+```bash
+aethel clean --ignored
+aethel clean --ignored --execute --confirm "DELETE IGNORED GOOGLE DRIVE FILES"
+```
+
+The command dry-runs by default and reports the topmost ignored Drive
+files/folders it would move to trash. Add `--permanent` only when you really
+want Drive items deleted instead of trashed.
 
 ## Environment Variables
 

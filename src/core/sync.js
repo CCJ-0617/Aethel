@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readConfig, readIndex, readLatestSnapshot, writeIndex } from "./config.js";
-import { downloadFile, ensureFolder, trashFile, uploadFile } from "./drive-api.js";
+import {
+  downloadFile,
+  ensureFolder,
+  findRemoteItemByPath,
+  trashFile,
+  uploadFile,
+} from "./drive-api.js";
 import { md5Local } from "./snapshot.js";
 
 function readPositiveIntEnv(name, fallback) {
@@ -175,14 +181,26 @@ function findSnapshotFileIdByPath(snapshot, entry) {
   return null;
 }
 
-async function deleteRemoteFile(drive, entry, snapshot) {
-  const fileId = entry.fileId || findSnapshotFileIdByPath(snapshot, entry);
+async function findRemoteFileId(drive, entry, snapshot, driveFolderId) {
+  const snapshotFileId = entry.fileId || findSnapshotFileIdByPath(snapshot, entry);
+  if (snapshotFileId) {
+    return snapshotFileId;
+  }
+
+  const remotePath = entry.remotePath || entry.path || entry.localPath;
+  const remoteItem = await findRemoteItemByPath(drive, remotePath, driveFolderId);
+  return remoteItem?.id || null;
+}
+
+async function deleteRemoteFile(drive, entry, snapshot, driveFolderId) {
+  const fileId = await findRemoteFileId(drive, entry, snapshot, driveFolderId);
 
   if (!fileId) {
-    throw new Error("No fileId was found for delete_remote.");
+    return false;
   }
 
   await trashFile(drive, fileId);
+  return true;
 }
 
 // ── Bounded-concurrency runner ───────────────────────────────────────
@@ -285,8 +303,8 @@ export async function executeStaged(drive, root, progress) {
         if (entry.isFolder) result.foldersCreated++;
         else result.uploaded++;
       } else if (action === "delete_remote") {
-        await deleteRemoteFile(drive, entry, snapshot);
-        result.deletedRemote++;
+        const deleted = await deleteRemoteFile(drive, entry, snapshot, driveFolderId);
+        if (deleted) result.deletedRemote++;
       } else {
         throw new Error(`Unknown action '${action}'`);
       }

@@ -10,6 +10,7 @@ import {
   dedupeDuplicateFiles,
   dedupeDuplicateFolders,
   ensureFolder,
+  listIgnoredRemoteItems,
   resetFolderLookupCache,
   syncLocalDirectoryToParent,
   uploadFile,
@@ -506,6 +507,76 @@ test("executeStaged resolves legacy delete_remote entries from snapshot path", a
   }
 });
 
+test("executeStaged resolves delete_remote entries from current Drive path", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    writeSnapshot(workspaceRoot, {
+      timestamp: new Date().toISOString(),
+      message: "baseline",
+      files: {},
+      localFiles: {},
+    });
+    writeIndex(workspaceRoot, {
+      staged: [
+        {
+          action: "delete_remote",
+          path: "docs/archive",
+          localPath: "docs/archive",
+        },
+      ],
+    });
+
+    const drive = createFakeDrive([
+      folder("folder-docs", "docs", "root", "2026-04-04T10:33:00.000Z"),
+      folder("folder-archive", "archive", "folder-docs", "2026-04-04T10:34:00.000Z"),
+      file("remote-child", "notes.txt", "folder-archive", "2026-04-04T10:35:00.000Z", "child"),
+    ]);
+    const result = await executeStaged(drive, workspaceRoot);
+
+    assert.equal(result.deletedRemote, 1);
+    assert.deepEqual(result.errors, []);
+    assert.equal(drive.snapshot().find((item) => item.id === "folder-archive").trashed, true);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("executeStaged treats missing path-only delete_remote entries as already deleted", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    writeSnapshot(workspaceRoot, {
+      timestamp: new Date().toISOString(),
+      message: "baseline",
+      files: {},
+      localFiles: {},
+    });
+    writeIndex(workspaceRoot, {
+      staged: [
+        {
+          action: "delete_remote",
+          path: "docs/archive/notes.txt",
+          localPath: "docs/archive/notes.txt",
+        },
+      ],
+    });
+
+    const drive = createFakeDrive([
+      folder("folder-docs", "docs", "root", "2026-04-04T10:33:00.000Z"),
+    ]);
+    const result = await executeStaged(drive, workspaceRoot);
+
+    assert.equal(result.deletedRemote, 0);
+    assert.deepEqual(result.errors, []);
+    assert.equal(readIndex(workspaceRoot).staged.length, 0);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("executeStaged keeps non-empty local folder deletions staged on failure", async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
 
@@ -665,4 +736,32 @@ test("syncLocalDirectoryToParent skips paths ignored by .aethelignore", async ()
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }
+});
+
+test("listIgnoredRemoteItems returns topmost ignored Drive items", async () => {
+  const drive = createFakeDrive([
+    folder("sync-root", "SyncRoot", "root", "2026-04-04T10:32:00.000Z"),
+    folder("build-folder", "build", "sync-root", "2026-04-04T10:33:00.000Z"),
+    file("build-child", "out.o", "build-folder", "2026-04-04T10:34:00.000Z", "obj"),
+    folder("logs-folder", "logs", "sync-root", "2026-04-04T10:35:00.000Z"),
+    file("log-file", "debug.log", "logs-folder", "2026-04-04T10:36:00.000Z", "log"),
+    file("keep-file", "notes.md", "sync-root", "2026-04-04T10:37:00.000Z", "notes"),
+  ]);
+  const ignoreRules = {
+    ignores(relativePath) {
+      return relativePath === "build" ||
+        relativePath.startsWith("build/") ||
+        relativePath.endsWith(".log");
+    },
+  };
+
+  const ignored = await listIgnoredRemoteItems(drive, "sync-root", ignoreRules);
+
+  assert.deepEqual(
+    ignored.map((item) => ({ id: item.id, path: item.path, isFolder: Boolean(item.isFolder) })),
+    [
+      { id: "build-folder", path: "build", isFolder: true },
+      { id: "log-file", path: "logs/debug.log", isFolder: false },
+    ]
+  );
 });

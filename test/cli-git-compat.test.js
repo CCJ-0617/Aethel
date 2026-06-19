@@ -44,6 +44,24 @@ test("top-level version uses --version so command-level -v remains available", (
   assert.match(shortVersion.stderr, /unknown option '-v'/);
 });
 
+test("clean supports ignored remote cleanup mode", () => {
+  const help = runCli(["clean", "--help"]);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /--ignored/);
+});
+
+test("clean --ignored uses the ignored cleanup confirmation phrase", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aethel-clean-ignored-"));
+  try {
+    initWorkspace(root, "abc123", "Test Drive");
+    const result = runCli(["clean", "--ignored", "--execute"], { cwd: root });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /DELETE IGNORED GOOGLE DRIVE FILES/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("restore --staged unstages paths like git restore --staged", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aethel-restore-staged-"));
   try {

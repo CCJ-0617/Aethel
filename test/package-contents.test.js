@@ -36,3 +36,12 @@ test("package files entries exist before npm packing", async () => {
   assert.deepEqual(missingEntries, []);
   assert.deepEqual(ignoredEntries, []);
 });
+
+test("package exposes stable and beta CLI command aliases", async () => {
+  const packageJson = JSON.parse(
+    await fs.readFile(path.join(root, "package.json"), "utf8")
+  );
+
+  assert.equal(packageJson.bin?.aethel, "src/cli.js");
+  assert.equal(packageJson.bin?.aethel_beta, "src/cli.js");
+});

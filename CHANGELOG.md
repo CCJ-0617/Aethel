@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.3.0 (2026-06-19)
+
+- Add `clean --ignored` to dry-run or trash Drive files and folders that match
+  the workspace `.aethelignore`.
+- Add a safer ignored-clean confirmation phrase:
+  `DELETE IGNORED GOOGLE DRIVE FILES`.
+- Fix partial commits so snapshots are not saved when staged operations fail.
+- Resolve `delete_remote` operations by current Drive path when legacy staged
+  entries do not contain a `fileId`.
+- Treat already-missing path-only remote deletes as successful no-ops.
+- Make `push --force` treat local state as authoritative by converting
+  Drive-only additions into remote deletions.
+- Collapse and deduplicate forced remote deletions to the highest missing local
+  ancestor so deleted folder trees converge in one pass.
+- Use cached remote state by default for `status`, `add`, `pull`, and `push`,
+  while keeping `fetch` as the explicit remote refresh command.
+- Include the beta CLI alias in package contents.
+
 ## 1.2.2 (2026-05-28)
 
 - Release Git-compatible Drive sync commands and Node 18 CI fixes

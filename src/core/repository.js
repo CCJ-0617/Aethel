@@ -25,6 +25,7 @@ import {
   batchOperateFiles,
   getAccountInfo,
   getRemoteState,
+  listIgnoredRemoteItems,
   listAccessibleFiles,
   listRootFolders,
   syncLocalDirectoryToParent,
@@ -216,6 +217,16 @@ export class Repository {
     return executeStaged(this.drive, this._root, progress);
   }
 
+  async commitStaged({ message = "sync", snapshotHint, progress } = {}) {
+    const result = await this.executeStaged(progress);
+    if (result.errors.length > 0) {
+      return result;
+    }
+
+    await this.saveSnapshot(message, snapshotHint);
+    return result;
+  }
+
   /**
    * Build and persist a new snapshot.
    *
@@ -260,6 +271,14 @@ export class Repository {
 
   async listRemoteFiles({ includeSharedDrives = false } = {}) {
     return listAccessibleFiles(this.drive, includeSharedDrives);
+  }
+
+  async listIgnoredRemoteItems(ignoreRules, { includeSharedDrives = false } = {}) {
+    const config = this.getConfig();
+    const rootFolderId = config.drive_folder_id || null;
+    return listIgnoredRemoteItems(this.drive, rootFolderId, ignoreRules, {
+      includeSharedDrives,
+    });
   }
 
   async listLocalEntries(targetPath) {
