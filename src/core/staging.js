@@ -24,6 +24,10 @@ function changeToEntry(change) {
     entry.isFolder = true;
   }
 
+  if (change.suggestedAction === "delete_local" && change.snapshotMeta?.isFolder) {
+    entry.recursiveLocalDelete = true;
+  }
+
   return entry;
 }
 

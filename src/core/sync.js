@@ -148,6 +148,11 @@ async function deleteLocalFile(entry, root) {
   }
 
   if (stat.isDirectory()) {
+    if (entry.recursiveLocalDelete) {
+      await fs.promises.rm(localAbsolutePath, { recursive: true, force: false });
+      return;
+    }
+
     await fs.promises.rmdir(localAbsolutePath);
     return;
   }
