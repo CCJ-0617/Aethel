@@ -5,6 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Repository } from "../src/core/repository.js";
 import { initWorkspace } from "../src/core/config.js";
+import { writeRemoteCache } from "../src/core/remote-cache.js";
 import { conflictResolutionChange } from "../src/core/staging.js";
 
 function makeTmpWorkspace() {
@@ -321,6 +322,50 @@ test("commitStaged does not save a snapshot when sync has errors", async () => {
     assert.equal(result.errors.length, 1);
     assert.equal(repo.getSnapshot(), null);
     assert.equal(repo.getStagedEntries().length, 1);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("loadState can use an expired remote cache for fast status", async () => {
+  const root = makeTmpWorkspace();
+  try {
+    writeRemoteCache(root, {
+      files: [
+        {
+          id: "remote-1",
+          path: "remote.txt",
+          name: "remote.txt",
+          mimeType: "text/plain",
+          md5Checksum: "remote-md5",
+        },
+      ],
+      duplicateFolders: [],
+    }, "fake-folder-id");
+
+    const cachePath = path.join(root, ".aethel", ".remote-cache.json");
+    const cache = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+    cache.timestamp = Date.now() - 86_400_000;
+    fs.writeFileSync(cachePath, JSON.stringify(cache) + "\n");
+
+    const repo = new Repository(root, {
+      drive: {
+        files: {
+          async list() {
+            throw new Error("status should not fetch remote state");
+          },
+        },
+      },
+    });
+
+    const state = await repo.loadState({
+      useCache: true,
+      remoteCacheTtlMs: Number.POSITIVE_INFINITY,
+    });
+
+    assert.equal(state.remoteState.files.length, 1);
+    assert.equal(state.timings.remoteCached, true);
+    assert.ok(state.timings.remoteCacheAgeMs >= 86_000_000);
   } finally {
     cleanup(root);
   }

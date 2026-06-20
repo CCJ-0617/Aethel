@@ -37,6 +37,8 @@ export function readRemoteCache(root, rootFolderId = null, ttlMs = DEFAULT_TTL_M
     return {
       files: raw.files,
       duplicateFolders: raw.duplicateFolders,
+      cacheTimestamp: raw.timestamp || null,
+      cacheAgeMs: age,
     };
   } catch {
     return null;

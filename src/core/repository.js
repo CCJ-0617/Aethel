@@ -120,7 +120,7 @@ export class Repository {
    * Load full workspace state in parallel, replacing the old
    * loadWorkspaceState() helper from cli.js.
    */
-  async loadState({ useCache = true, onPhase } = {}) {
+  async loadState({ useCache = true, remoteCacheTtlMs, onPhase } = {}) {
     const config = this.getConfig();
     const t0 = Date.now();
 
@@ -138,9 +138,10 @@ export class Repository {
         timings.snapshotMs = Date.now() - t0;
         return r;
       }),
-      this._loadRemoteState({ useCache }).then((r) => {
+      this._loadRemoteState({ useCache, cacheTtlMs: remoteCacheTtlMs }).then((r) => {
         timings.remoteMs = Date.now() - t0;
-        timings.remoteCached = useCache && timings.remoteMs < 100;
+        timings.remoteCached = Boolean(r.cacheTimestamp);
+        timings.remoteCacheAgeMs = r.cacheAgeMs ?? null;
         onPhase?.("remote", timings.remoteMs);
         return r;
       }),
@@ -648,12 +649,12 @@ export class Repository {
 
   // ── Private helpers ─────────────────────────────────────────────────
 
-  async _loadRemoteState({ useCache = true } = {}) {
+  async _loadRemoteState({ useCache = true, cacheTtlMs } = {}) {
     const config = this.getConfig();
     const rootFolderId = config.drive_folder_id || null;
 
     let remoteState = useCache
-      ? readRemoteCache(this._root, rootFolderId)
+      ? readRemoteCache(this._root, rootFolderId, cacheTtlMs)
       : null;
 
     if (!remoteState) {

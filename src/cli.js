@@ -628,6 +628,7 @@ async function handleStatus(options) {
   const repo = await openRepo(options);
   const { diff } = await loadStateWithProgress(repo, {
     useCache: remoteCacheEnabledByDefault("status"),
+    remoteCacheTtlMs: Number.POSITIVE_INFINITY,
   });
   const staged = repo.getStagedEntries();
 

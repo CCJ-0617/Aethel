@@ -14,6 +14,8 @@
   tree, while keeping the global Drive listing for large snapshots.
 - Store a Drive-side remote memo for large folder workspaces and refresh it
   with Drive change tokens to avoid repeated full remote listings.
+- Keep `status` fast by reusing the local remote cache even after the normal
+  short cache TTL expires.
 
 ## 1.3.3 (2026-06-20)
 
