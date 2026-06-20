@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.3 (2026-06-20)
+
+- Fix large force syncs and add debug diagnostics
+
 ## 1.3.2 (2026-06-20)
 
 - Fix remote-deleted folder commits
