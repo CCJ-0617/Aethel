@@ -1,15 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Make `pull` fetch fresh Drive state by default so remote deletions are applied
+  locally instead of being hidden by a stale remote cache.
+
 ## 1.3.3 (2026-06-20)
 
 - Fix large force syncs and add debug diagnostics
-
-## 1.3.2 (2026-06-20)
-
-- Fix remote-deleted folder commits
-
-## Unreleased
-
 - Ignore nested Rust/Tauri `target/` build directories by default.
 - Skip transient local files that disappear during scan or upload instead of
   failing the sync.
@@ -19,6 +17,10 @@
   per-conflict staging writes for large conflict sets.
 - Add `--debug`/`AETHEL_DEBUG=1` diagnostics and `--dry-run-limit` for large
   `push`/`pull` dry-run previews.
+
+## 1.3.2 (2026-06-20)
+
+- Fix remote-deleted folder commits.
 
 ## 1.3.1 (2026-06-19)
 
