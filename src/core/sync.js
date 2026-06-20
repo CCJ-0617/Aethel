@@ -17,6 +17,10 @@ function readPositiveIntEnv(name, fallback) {
 
 const CONCURRENCY = readPositiveIntEnv("AETHEL_DRIVE_CONCURRENCY", 10);
 
+function isMissingLocalFileError(err) {
+  return err?.code === "ENOENT" || err?.code === "ENOTDIR";
+}
+
 function toLocalAbsolutePath(root, relativePath) {
   const abs = path.resolve(root, ...relativePath.split("/"));
   const resolvedRoot = path.resolve(root);
@@ -91,20 +95,30 @@ async function downloadStagedFile(drive, entry, root) {
   await downloadFile(drive, { ...response.data, id: fileId }, localAbsolutePath);
 }
 
-async function uploadStagedFile(drive, entry, root, driveFolderId) {
+async function handleMissingUploadSource(drive, entry, snapshot, driveFolderId) {
+  const deleted = await deleteRemoteFile(drive, entry, snapshot, driveFolderId);
+  return deleted ? "deleted_remote" : "skipped";
+}
+
+async function uploadStagedFile(drive, entry, root, driveFolderId, snapshot) {
   const localRelativePath = entry.localPath || entry.path;
   const remotePath = entry.remotePath || entry.path;
-
-  // Empty folder: just ensure it exists on Drive
-  if (entry.isFolder) {
-    await ensureFolder(drive, remotePath, driveFolderId);
-    return;
-  }
-
   const localAbsolutePath = toLocalAbsolutePath(root, localRelativePath);
 
-  if (!fs.existsSync(localAbsolutePath)) {
-    throw new Error(`Local file not found: ${localAbsolutePath}`);
+  let localStat;
+  try {
+    localStat = await fs.promises.lstat(localAbsolutePath);
+  } catch (err) {
+    if (isMissingLocalFileError(err)) {
+      return handleMissingUploadSource(drive, entry, snapshot, driveFolderId);
+    }
+    throw err;
+  }
+
+  // Empty folder: just ensure it exists on Drive
+  if (entry.isFolder || localStat.isDirectory()) {
+    await ensureFolder(drive, remotePath, driveFolderId);
+    return "folder_created";
   }
 
   const parentPath = path.posix.dirname(remotePath);
@@ -114,16 +128,32 @@ async function uploadStagedFile(drive, entry, root, driveFolderId) {
     parentId = await ensureFolder(drive, parentPath, driveFolderId);
   }
 
-  const uploadResult = await uploadFile(drive, localAbsolutePath, remotePath, {
-    parentId,
-    existingId: entry.fileId || null,
-    cleanupDuplicates: true,
-  });
+  let uploadResult;
+  try {
+    uploadResult = await uploadFile(drive, localAbsolutePath, remotePath, {
+      parentId,
+      existingId: entry.fileId || null,
+      cleanupDuplicates: true,
+    });
+  } catch (err) {
+    if (isMissingLocalFileError(err)) {
+      return handleMissingUploadSource(drive, entry, snapshot, driveFolderId);
+    }
+    throw err;
+  }
 
   // Verify: Drive-returned md5 must match the local file we just uploaded.
   // Google Workspace files (Docs, Sheets, etc.) don't have md5 — skip them.
   if (uploadResult?.md5Checksum) {
-    const localMd5 = await md5Local(localAbsolutePath);
+    let localMd5;
+    try {
+      localMd5 = await md5Local(localAbsolutePath);
+    } catch (err) {
+      if (isMissingLocalFileError(err)) {
+        return "uploaded";
+      }
+      throw err;
+    }
     if (localMd5 !== uploadResult.md5Checksum) {
       throw new Error(
         `Upload integrity check failed for ${remotePath}: ` +
@@ -131,6 +161,8 @@ async function uploadStagedFile(drive, entry, root, driveFolderId) {
       );
     }
   }
+
+  return "uploaded";
 }
 
 async function deleteLocalFile(entry, root) {
@@ -337,9 +369,10 @@ export async function executeStaged(drive, root, progress) {
         if (entry.isFolder) result.foldersCreated++;
         else result.downloaded++;
       } else if (action === "upload") {
-        await uploadStagedFile(drive, entry, root, driveFolderId);
-        if (entry.isFolder) result.foldersCreated++;
-        else result.uploaded++;
+        const outcome = await uploadStagedFile(drive, entry, root, driveFolderId, snapshot);
+        if (outcome === "folder_created") result.foldersCreated++;
+        else if (outcome === "uploaded") result.uploaded++;
+        else if (outcome === "deleted_remote") result.deletedRemote++;
       } else if (action === "delete_remote") {
         const deleted = await deleteRemoteFile(drive, entry, snapshot, driveFolderId);
         if (deleted) result.deletedRemote++;

@@ -9,6 +9,8 @@
 - Ignore nested Rust/Tauri `target/` build directories by default.
 - Skip transient local files that disappear during scan or upload instead of
   failing the sync.
+- Treat stale staged uploads whose local source is gone as local deletions when
+  a Drive file exists, and skip them when no remote file exists.
 
 ## 1.3.1 (2026-06-19)
 

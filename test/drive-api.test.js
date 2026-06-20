@@ -579,6 +579,65 @@ test("executeStaged treats missing path-only delete_remote entries as already de
   }
 });
 
+test("executeStaged treats missing staged upload source as local deletion", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-stale-upload-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    writeIndex(workspaceRoot, {
+      staged: [
+        {
+          action: "upload",
+          path: "deleted-locally.md",
+          localPath: "deleted-locally.md",
+          remotePath: "deleted-locally.md",
+          fileId: "remote-file",
+        },
+      ],
+    });
+
+    const drive = createFakeDrive([
+      file("remote-file", "deleted-locally.md", "root", "2026-04-04T10:34:00.000Z", "old"),
+    ]);
+    const result = await executeStaged(drive, workspaceRoot);
+
+    assert.equal(result.errors.length, 0);
+    assert.equal(result.deletedRemote, 1);
+    assert.equal(result.uploaded, 0);
+    assert.equal(readIndex(workspaceRoot).staged.length, 0);
+    assert.equal(drive.snapshot().find((item) => item.id === "remote-file").trashed, true);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("executeStaged drops missing staged upload source when no remote exists", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-stale-new-upload-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    writeIndex(workspaceRoot, {
+      staged: [
+        {
+          action: "upload",
+          path: "new-then-deleted.md",
+          localPath: "new-then-deleted.md",
+        },
+      ],
+    });
+
+    const drive = createFakeDrive([]);
+    const result = await executeStaged(drive, workspaceRoot);
+
+    assert.equal(result.errors.length, 0);
+    assert.equal(result.total, 0);
+    assert.equal(readIndex(workspaceRoot).staged.length, 0);
+    assert.equal(drive.snapshot().length, 0);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("executeStaged keeps non-empty local folder deletions staged on failure", async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
 

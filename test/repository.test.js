@@ -193,14 +193,49 @@ test("unstageAll clears all staged entries", () => {
   }
 });
 
+test("stageConflictResolution ours deletes remote when local side is missing", () => {
+  const root = makeTmpWorkspace();
+  try {
+    const repo = new Repository(root);
+    repo.stageConflictResolution({
+      path: "deleted-locally.md",
+      fileId: "drive-file-id",
+      localMeta: null,
+      remoteMeta: { path: "deleted-locally.md" },
+      snapshotMeta: { path: "deleted-locally.md" },
+    }, "ours");
+
+    assert.deepEqual(repo.getStagedEntries(), [
+      {
+        action: "delete_remote",
+        path: "deleted-locally.md",
+        localPath: "deleted-locally.md",
+        fileId: "drive-file-id",
+        remotePath: "deleted-locally.md",
+      },
+    ]);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test("commitStaged does not save a snapshot when sync has errors", async () => {
   const root = makeTmpWorkspace();
   try {
-    const repo = new Repository(root, { drive: { files: {} } });
+    fs.writeFileSync(path.join(root, "upload.txt"), "upload me");
+    const repo = new Repository(root, {
+      drive: {
+        files: {
+          async create() {
+            throw new Error("Drive upload failed");
+          },
+        },
+      },
+    });
     repo.stageChange({
-      path: "missing.exe",
+      path: "upload.txt",
       suggestedAction: "upload",
-      localMeta: { localPath: "missing.exe" },
+      localMeta: { localPath: "upload.txt" },
     });
 
     const result = await repo.commitStaged({ message: "partial sync" });

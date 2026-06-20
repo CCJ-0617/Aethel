@@ -111,6 +111,15 @@ export function stageConflictResolution(root, change, strategy) {
   }
 
   if (strategy === "ours") {
+    if (!change.localMeta) {
+      // Keep a local deletion → delete the Drive copy
+      return stageChange(root, {
+        ...change,
+        changeType: "local_deleted",
+        suggestedAction: "delete_remote",
+      });
+    }
+
     // Keep local version → upload
     return stageChange(root, {
       ...change,
