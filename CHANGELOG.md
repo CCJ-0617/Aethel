@@ -1,11 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- No unreleased changes.
+
 ## 1.3.1 (2026-06-19)
 
 - Fix local deletions for staged directory paths that are missing folder
   metadata by checking the filesystem before deleting.
 - Report unsupported Google Workspace downloads clearly instead of attempting a
   binary Drive media download and surfacing a raw 403.
+- Update `react-devtools-core` from 6.1.5 to 7.0.1.
+- Update `ink` from 7.0.5 to 7.0.6.
 
 ## 1.3.0 (2026-06-19)
 
@@ -27,10 +33,7 @@
 
 ## 1.2.2 (2026-05-28)
 
-- Release Git-compatible Drive sync commands and Node 18 CI fixes
-
-## Unreleased
-
+- Release Git-compatible Drive sync commands and Node 18 CI fixes.
 - Align CLI spellings with common Git habits:
   - `clone <drive-folder> <dir>`
   - `status --short` / `status -s`

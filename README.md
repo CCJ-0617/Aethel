@@ -3,7 +3,7 @@
 [![CI](https://github.com/CCJ-0617/Aethel/actions/workflows/ci.yml/badge.svg)](https://github.com/CCJ-0617/Aethel/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/aethel)](https://www.npmjs.com/package/aethel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen)](https://nodejs.org)
 
 **Git-style Google Drive sync from your terminal.**
 
@@ -28,7 +28,7 @@ npm run install:debug # symlinks `debug_aethel` without replacing `aethel`
 
 </details>
 
-**Requires Node.js >= 18**
+**Requires Node.js >= 22.12**
 
 ## Setup
 
