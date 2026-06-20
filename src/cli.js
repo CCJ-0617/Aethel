@@ -41,6 +41,77 @@ import { runTui } from "./tui/index.js";
 const REQUIRED_CONFIRMATION = "DELETE ALL MY GOOGLE DRIVE FILES";
 const REQUIRED_IGNORED_CONFIRMATION = "DELETE IGNORED GOOGLE DRIVE FILES";
 
+function debugEnabled(options = {}) {
+  const env = String(process.env.AETHEL_DEBUG || "").toLowerCase();
+  return Boolean(options.debug) || ["1", "true", "yes", "on"].includes(env);
+}
+
+function formatDebugMs(ms) {
+  return `${Math.round(ms)}ms`;
+}
+
+function debugMemory() {
+  const usage = process.memoryUsage();
+  return `rss=${Math.round(usage.rss / 1024 / 1024)}MB heap=${Math.round(usage.heapUsed / 1024 / 1024)}MB`;
+}
+
+function createDebugLogger(options = {}) {
+  const enabled = debugEnabled(options);
+  const startedAt = Date.now();
+  let previousAt = startedAt;
+
+  return (message, details = {}) => {
+    if (!enabled) {
+      return;
+    }
+
+    const now = Date.now();
+    const fields = Object.entries(details)
+      .filter(([, value]) => value !== undefined && value !== null)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(" ");
+    process.stderr.write(
+      `[aethel:debug +${formatDebugMs(now - startedAt)} Δ${formatDebugMs(now - previousAt)}] ` +
+        `${message}${fields ? ` ${fields}` : ""} ${debugMemory()}\n`
+    );
+    previousAt = now;
+  };
+}
+
+function parseDryRunLimit(value) {
+  if (value === undefined || value === null || value === "") {
+    return Infinity;
+  }
+
+  const limit = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(limit) || limit < 0) {
+    throw new Error(`Invalid --dry-run-limit '${value}'. Expected a non-negative integer.`);
+  }
+  return limit;
+}
+
+function printChangePreview({ label, changes, debug, dryRunLimit }) {
+  const limit = parseDryRunLimit(dryRunLimit);
+  const visible = Number.isFinite(limit) ? changes.slice(0, limit) : changes;
+  debug("dry-run render start", { total: changes.length, visible: visible.length });
+
+  console.log(`Would ${label} ${changes.length} change(s):`);
+  let rendered = 0;
+  for (const c of visible) {
+    console.log(`  ${c.shortStatus} ${c.path}  (${c.description})`);
+    rendered++;
+    if (rendered % 1000 === 0) {
+      debug("dry-run render progress", { rendered, total: visible.length });
+    }
+  }
+
+  if (visible.length < changes.length) {
+    console.log(`  ... ${changes.length - visible.length} more change(s) hidden by --dry-run-limit`);
+  }
+
+  debug("dry-run render done", { rendered: visible.length, total: changes.length });
+}
+
 function addAuthOptions(command) {
   return command
     .option("--credentials <path>", "Path to OAuth client credentials JSON")
@@ -849,9 +920,20 @@ async function handleFetch(options) {
 }
 
 async function handlePull(paths, options) {
+  const debug = createDebugLogger(options);
+  debug("pull start", {
+    force: Boolean(options.force),
+    dryRun: Boolean(options.dryRun),
+    paths: paths?.length || 0,
+  });
   const repo = await openRepo(options);
   const { diff, remoteState } = await loadStateWithProgress(repo, {
     useCache: remoteCacheEnabledByDefault("pull"),
+  });
+  debug("pull state loaded", {
+    changes: diff.changes.length,
+    conflicts: diff.conflicts.length,
+    remoteFiles: remoteState.files.length,
   });
 
   if (options.all) {
@@ -893,8 +975,10 @@ async function handlePull(paths, options) {
     ].includes(change.changeType)
   );
   let forcedPullConflictChanges = [];
+  debug("pull base changes selected", { remoteChanges: remoteChanges.length });
 
   if (options.force) {
+    debug("pull force conflict conversion start", { conflicts: diff.conflicts.length });
     forcedPullConflictChanges = diff.conflicts.map((conflict) =>
       conflictResolutionChange(conflict, "theirs")
     );
@@ -904,15 +988,21 @@ async function handlePull(paths, options) {
         ...forcedPullConflictChanges,
       ];
     }
+    debug("pull force conflict conversion done", {
+      forcedConflicts: forcedPullConflictChanges.length,
+      remoteChanges: remoteChanges.length,
+    });
   }
 
   if (paths && paths.length > 0) {
+    debug("pull path filter start", { paths: paths.length, before: remoteChanges.length });
     remoteChanges = remoteChanges.filter((change) =>
       paths.some((p) => matchesPattern(change.path, p))
     );
     forcedPullConflictChanges = forcedPullConflictChanges.filter((change) =>
       paths.some((p) => matchesPattern(change.path, p))
     );
+    debug("pull path filter done", { after: remoteChanges.length });
   }
 
   if (forcedPullConflictChanges.length) {
@@ -928,14 +1018,18 @@ async function handlePull(paths, options) {
   }
 
   if (options.dryRun) {
-    console.log(`Would pull ${remoteChanges.length} change(s):`);
-    for (const c of remoteChanges) {
-      console.log(`  ${c.shortStatus} ${c.path}  (${c.description})`);
-    }
+    printChangePreview({
+      label: "pull",
+      changes: remoteChanges,
+      debug,
+      dryRunLimit: options.dryRunLimit,
+    });
     return;
   }
 
+  debug("pull staging start", { changes: remoteChanges.length });
   const count = repo.stageChanges(remoteChanges);
+  debug("pull staging done", { staged: count });
   console.log(`Staged ${count} remote change(s). Committing...`);
   // Pull downloads remote→local: remote state unchanged, only re-scan local
   await handleCommit({ ...options, message: options.message || "pull" }, {
@@ -945,9 +1039,20 @@ async function handlePull(paths, options) {
 }
 
 async function handlePush(paths, options) {
+  const debug = createDebugLogger(options);
+  debug("push start", {
+    force: Boolean(options.force),
+    dryRun: Boolean(options.dryRun),
+    paths: paths?.length || 0,
+  });
   const repo = await openRepo(options);
   const { diff, local } = await loadStateWithProgress(repo, {
     useCache: remoteCacheEnabledByDefault("push"),
+  });
+  debug("push state loaded", {
+    changes: diff.changes.length,
+    conflicts: diff.conflicts.length,
+    localEntries: Object.keys(local?.files ?? local ?? {}).length,
   });
 
   let localChanges = diff.changes.filter((change) =>
@@ -958,11 +1063,13 @@ async function handlePush(paths, options) {
     ].includes(change.changeType)
   );
   let forcedPushConflictChanges = [];
+  debug("push base changes selected", { localChanges: localChanges.length });
 
   if (options.force) {
     const remoteAdditions = diff.remoteChanges.filter(
       (change) => change.changeType === ChangeType.REMOTE_ADDED
     );
+    debug("push remote additions conversion start", { remoteAdditions: remoteAdditions.length });
     localChanges = [
       ...localChanges,
       ...changesWithLocalAuthority(remoteAdditions, {
@@ -970,7 +1077,9 @@ async function handlePush(paths, options) {
           fs.existsSync(path.join(repo.root, ...relativePath.split("/"))),
       }),
     ];
+    debug("push remote additions conversion done", { localChanges: localChanges.length });
 
+    debug("push force conflict conversion start", { conflicts: diff.conflicts.length });
     forcedPushConflictChanges = diff.conflicts.map((conflict) =>
       conflictResolutionChange(conflict, "ours")
     );
@@ -980,15 +1089,21 @@ async function handlePush(paths, options) {
         ...forcedPushConflictChanges,
       ];
     }
+    debug("push force conflict conversion done", {
+      forcedConflicts: forcedPushConflictChanges.length,
+      localChanges: localChanges.length,
+    });
   }
 
   if (paths && paths.length > 0) {
+    debug("push path filter start", { paths: paths.length, before: localChanges.length });
     localChanges = localChanges.filter((change) =>
       paths.some((p) => matchesPattern(change.path, p))
     );
     forcedPushConflictChanges = forcedPushConflictChanges.filter((change) =>
       paths.some((p) => matchesPattern(change.path, p))
     );
+    debug("push path filter done", { after: localChanges.length });
   }
 
   if (forcedPushConflictChanges.length) {
@@ -1004,14 +1119,18 @@ async function handlePush(paths, options) {
   }
 
   if (options.dryRun) {
-    console.log(`Would push ${localChanges.length} change(s):`);
-    for (const c of localChanges) {
-      console.log(`  ${c.shortStatus} ${c.path}  (${c.description})`);
-    }
+    printChangePreview({
+      label: "push",
+      changes: localChanges,
+      debug,
+      dryRunLimit: options.dryRunLimit,
+    });
     return;
   }
 
+  debug("push staging start", { changes: localChanges.length });
   const count = repo.stageChanges(localChanges);
+  debug("push staging done", { staged: count });
   console.log(`Staged ${count} local change(s). Committing...`);
   // Push uploads local→remote: local state unchanged, only re-fetch remote
   await handleCommit({ ...options, message: options.message || "push" }, {
@@ -1744,6 +1863,8 @@ async function main() {
       .option("-m, --message <message>", "Commit message")
       .option("--force", "Force-pull conflicts (remote wins)")
       .option("--dry-run", "Preview changes without applying")
+      .option("--dry-run-limit <number>", "Limit dry-run preview entries")
+      .option("--debug", "Show debug timings on stderr")
   ).action((paths, options) => handlePull(paths, options));
 
   addAuthOptions(
@@ -1754,6 +1875,8 @@ async function main() {
       .option("-m, --message <message>", "Commit message")
       .option("--force", "Force-push conflicts (local wins)")
       .option("--dry-run", "Preview changes without applying")
+      .option("--dry-run-limit <number>", "Limit dry-run preview entries")
+      .option("--debug", "Show debug timings on stderr")
   ).action((paths, options) => handlePush(paths, options));
 
   addAuthOptions(

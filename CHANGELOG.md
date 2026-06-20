@@ -13,6 +13,8 @@
   a Drive file exists, and skip them when no remote file exists.
 - Keep `push --dry-run --force` and `pull --dry-run --force` read-only and avoid
   per-conflict staging writes for large conflict sets.
+- Add `--debug`/`AETHEL_DEBUG=1` diagnostics and `--dry-run-limit` for large
+  `push`/`pull` dry-run previews.
 
 ## 1.3.1 (2026-06-19)
 

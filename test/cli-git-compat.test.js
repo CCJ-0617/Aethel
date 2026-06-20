@@ -50,6 +50,18 @@ test("clean supports ignored remote cleanup mode", () => {
   assert.match(help.stdout, /--ignored/);
 });
 
+test("push and pull expose debug dry-run diagnostics options", () => {
+  const pushHelp = runCli(["push", "--help"]);
+  assert.equal(pushHelp.status, 0, pushHelp.stderr);
+  assert.match(pushHelp.stdout, /--debug/);
+  assert.match(pushHelp.stdout, /--dry-run-limit/);
+
+  const pullHelp = runCli(["pull", "--help"]);
+  assert.equal(pullHelp.status, 0, pullHelp.stderr);
+  assert.match(pullHelp.stdout, /--debug/);
+  assert.match(pullHelp.stdout, /--dry-run-limit/);
+});
+
 test("clean --ignored uses the ignored cleanup confirmation phrase", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aethel-clean-ignored-"));
   try {
