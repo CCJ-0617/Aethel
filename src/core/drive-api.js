@@ -21,6 +21,10 @@ const DRIVE_API_CONCURRENCY = readPositiveIntEnv(
   "AETHEL_DRIVE_CONCURRENCY",
   40
 );
+const SCOPED_FETCH_MAX_SNAPSHOT_FILES = readPositiveIntEnv(
+  "AETHEL_SCOPED_FETCH_MAX_SNAPSHOT_FILES",
+  5000
+);
 const UPLOAD_BATCH_SIZE = DRIVE_API_CONCURRENCY;
 const DEDUPE_BATCH_SIZE = DRIVE_API_CONCURRENCY;
 
@@ -275,6 +279,93 @@ async function fetchAllItems(drive, { fields, includeSharedDrives = false } = {}
   return { folders, files };
 }
 
+async function listChildItems(drive, parentId, { fields = DEFAULT_ITEM_FIELDS } = {}) {
+  const files = [];
+  let pageToken = null;
+
+  do {
+    const response = await drive.files.list({
+      q: `'${escapeDriveQueryValue(parentId)}' in parents and trashed = false`,
+      fields,
+      pageSize: PAGE_SIZE,
+      pageToken,
+    });
+
+    files.push(...(response.data.files || []));
+    pageToken = response.data.nextPageToken;
+  } while (pageToken);
+
+  return files;
+}
+
+async function fetchScopedItems(drive, rootFolderId, { fields = DEFAULT_ITEM_FIELDS } = {}) {
+  const folders = new Map();
+  const files = [];
+  const seenFolderIds = new Set([rootFolderId]);
+
+  const rootResponse = await drive.files.get({
+    fileId: rootFolderId,
+    fields: "id,name,mimeType,parents,createdTime,modifiedTime",
+  });
+  if (rootResponse?.data?.id) {
+    folders.set(rootResponse.data.id, rootResponse.data);
+  }
+
+  let currentLevel = [rootFolderId];
+  while (currentLevel.length > 0) {
+    const nextLevel = [];
+    for (let index = 0; index < currentLevel.length; index += DRIVE_API_CONCURRENCY) {
+      const batch = currentLevel.slice(index, index + DRIVE_API_CONCURRENCY);
+      const batchChildren = await Promise.all(
+        batch.map((parentId) => listChildItems(drive, parentId, { fields }))
+      );
+
+      for (const children of batchChildren) {
+        for (const item of children) {
+          if (item.mimeType === FOLDER_MIME) {
+            folders.set(item.id, item);
+            if (!seenFolderIds.has(item.id)) {
+              seenFolderIds.add(item.id);
+              nextLevel.push(item.id);
+            }
+          } else {
+            files.push(item);
+          }
+        }
+      }
+    }
+    currentLevel = nextLevel;
+  }
+
+  return { folders, files };
+}
+
+function shouldUseScopedFetch(rootFolderId, { estimatedRemoteFiles = null, fetchMode = null } = {}) {
+  if (!rootFolderId) {
+    return false;
+  }
+
+  const mode = String(fetchMode || process.env.AETHEL_REMOTE_FETCH_MODE || "auto").toLowerCase();
+  if (mode === "scoped") {
+    return true;
+  }
+  if (mode === "all" || mode === "global") {
+    return false;
+  }
+
+  if (!Number.isFinite(estimatedRemoteFiles)) {
+    return true;
+  }
+  return estimatedRemoteFiles <= SCOPED_FETCH_MAX_SNAPSHOT_FILES;
+}
+
+async function fetchRemoteItems(drive, rootFolderId = null, options = {}) {
+  if (shouldUseScopedFetch(rootFolderId, options)) {
+    return fetchScopedItems(drive, rootFolderId, options);
+  }
+  return fetchAllItems(drive, options);
+}
+
 /**
  * Build a cached orphan checker. A folder is "orphaned" if its parent
  * chain leads to a trashed/inaccessible folder rather than "root".
@@ -283,7 +374,7 @@ async function fetchAllItems(drive, { fields, includeSharedDrives = false } = {}
  * trashed. They remain `trashed = false` but their parent is gone from
  * our fetched folder map, making them "orphaned".
  */
-function createOrphanChecker(folders) {
+function createOrphanChecker(folders, rootFolderId = null) {
   const cache = new Map();
 
   return function isOrphaned(folderId) {
@@ -294,7 +385,7 @@ function createOrphanChecker(folders) {
     let current = folderId;
 
     while (current) {
-      if (current === "root") {
+      if (current === "root" || current === rootFolderId) {
         for (const id of pending) cache.set(id, false);
         return false;
       }
@@ -320,7 +411,7 @@ function createOrphanChecker(folders) {
 
 function buildRemoteFiles(folders, rawFiles, rootFolderId = null) {
   const resolve = createFolderResolver(folders, rootFolderId);
-  const isOrphaned = createOrphanChecker(folders);
+  const isOrphaned = createOrphanChecker(folders, rootFolderId);
   const files = [];
 
   // Track which folders have children (files or subfolders)
@@ -382,7 +473,7 @@ function buildRemoteFiles(folders, rawFiles, rootFolderId = null) {
 
 function buildRemoteItems(folders, rawFiles, rootFolderId = null) {
   const resolve = createFolderResolver(folders, rootFolderId);
-  const isOrphaned = createOrphanChecker(folders);
+  const isOrphaned = createOrphanChecker(folders, rootFolderId);
   const items = [];
 
   for (const folder of folders.values()) {
@@ -532,7 +623,7 @@ function latestFileComparator(left, right) {
 
 function buildDuplicateFileGroups(folders, rawFiles, rootFolderId = null, ignoreRules = null) {
   const resolve = createFolderResolver(folders, rootFolderId);
-  const isOrphaned = createOrphanChecker(folders);
+  const isOrphaned = createOrphanChecker(folders, rootFolderId);
   const groups = new Map();
 
   for (const file of rawFiles) {
@@ -613,8 +704,8 @@ export class DuplicateFoldersError extends Error {
   }
 }
 
-export async function getRemoteState(drive, rootFolderId = null, ignoreRules = null) {
-  const { folders, files } = await fetchAllItems(drive);
+export async function getRemoteState(drive, rootFolderId = null, ignoreRules = null, options = {}) {
+  const { folders, files } = await fetchRemoteItems(drive, rootFolderId, options);
   return {
     files: buildRemoteFiles(folders, files, rootFolderId),
     duplicateFolders: buildDuplicateFolderGroups(folders, rootFolderId, ignoreRules),

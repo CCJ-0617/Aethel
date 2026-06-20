@@ -11,6 +11,7 @@ import {
   dedupeDuplicateFiles,
   dedupeDuplicateFolders,
   ensureFolder,
+  getRemoteState,
   listIgnoredRemoteItems,
   resetFolderLookupCache,
   syncLocalDirectoryToParent,
@@ -417,6 +418,54 @@ test("dedupeDuplicateFiles keeps latest modified file and trashes older copies",
   assert.equal(snapshot.find((item) => item.id === "old").trashed, true);
   assert.equal(snapshot.find((item) => item.id === "middle").trashed, true);
   assert.equal(snapshot.find((item) => item.id === "nested-old").trashed, true);
+});
+
+test("getRemoteState walks only the configured Drive folder tree", async () => {
+  const drive = createFakeDrive([
+    folder("project", "Project", "real-my-drive-root", "2026-04-04T10:00:00.000Z"),
+    folder("docs", "docs", "project", "2026-04-04T10:01:00.000Z"),
+    file("inside", "inside.txt", "docs", "2026-04-04T10:02:00.000Z", "inside"),
+    file("root-child", "root-child.txt", "project", "2026-04-04T10:02:30.000Z", "root-child"),
+    folder("empty", "empty", "project", "2026-04-04T10:03:00.000Z"),
+    folder("outside", "Outside", "real-my-drive-root", "2026-04-04T10:04:00.000Z"),
+    file("outside-file", "outside.txt", "outside", "2026-04-04T10:05:00.000Z", "outside"),
+  ]);
+
+  const remoteState = await getRemoteState(drive, "project");
+
+  assert.deepEqual(
+    remoteState.files.map((item) => item.path).sort(),
+    ["docs/inside.txt", "empty", "root-child.txt"]
+  );
+  assert.equal(
+    drive.listQueries().some((query) => query === "trashed = false"),
+    false
+  );
+  assert.deepEqual(drive.listQueries(), [
+    "'project' in parents and trashed = false",
+    "'docs' in parents and trashed = false",
+    "'empty' in parents and trashed = false",
+  ]);
+});
+
+test("getRemoteState uses global fetch for large configured folder snapshots", async () => {
+  const drive = createFakeDrive([
+    folder("project", "Project", "real-my-drive-root", "2026-04-04T10:00:00.000Z"),
+    folder("docs", "docs", "project", "2026-04-04T10:01:00.000Z"),
+    file("inside", "inside.txt", "docs", "2026-04-04T10:02:00.000Z", "inside"),
+    folder("outside", "Outside", "real-my-drive-root", "2026-04-04T10:04:00.000Z"),
+    file("outside-file", "outside.txt", "outside", "2026-04-04T10:05:00.000Z", "outside"),
+  ]);
+
+  const remoteState = await getRemoteState(drive, "project", null, {
+    estimatedRemoteFiles: 50_000,
+  });
+
+  assert.deepEqual(remoteState.files.map((item) => item.path), ["docs/inside.txt"]);
+  assert.equal(
+    drive.listQueries().some((query) => query === "trashed = false"),
+    true
+  );
 });
 
 test("executeStaged does not create duplicate folders during concurrent uploads", async () => {

@@ -246,7 +246,7 @@ export class Repository {
     if (needRemote) invalidateRemoteCache(this._root);
 
     const [remoteState, localFiles] = await Promise.all([
-      needRemote ? getRemoteState(this.drive, rootFolderId) : remote,
+      needRemote ? getRemoteState(this.drive, rootFolderId, null, this._remoteFetchOptions()) : remote,
       needLocal ? scanLocal(this._root) : local,
     ]);
 
@@ -657,11 +657,19 @@ export class Repository {
       : null;
 
     if (!remoteState) {
-      remoteState = await getRemoteState(this.drive, rootFolderId);
+      remoteState = await getRemoteState(this.drive, rootFolderId, null, this._remoteFetchOptions());
       writeRemoteCache(this._root, remoteState, rootFolderId);
     }
 
     assertNoDuplicateFolders(remoteState.duplicateFolders);
     return remoteState;
+  }
+
+  _remoteFetchOptions() {
+    const snapshot = readLatestSnapshot(this._root);
+    const estimatedRemoteFiles = snapshot?.files
+      ? Object.keys(snapshot.files).length
+      : null;
+    return { estimatedRemoteFiles };
   }
 }
