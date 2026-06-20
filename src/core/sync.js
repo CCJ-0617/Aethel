@@ -15,7 +15,10 @@ function readPositiveIntEnv(name, fallback) {
   return Number.isFinite(rawValue) && rawValue > 0 ? rawValue : fallback;
 }
 
-const CONCURRENCY = readPositiveIntEnv("AETHEL_DRIVE_CONCURRENCY", 10);
+const CONCURRENCY = readPositiveIntEnv(
+  "AETHEL_TRANSFER_CONCURRENCY",
+  readPositiveIntEnv("AETHEL_DRIVE_CONCURRENCY", 20)
+);
 
 function isMissingLocalFileError(err) {
   return err?.code === "ENOENT" || err?.code === "ENOTDIR";
@@ -87,12 +90,22 @@ async function downloadStagedFile(drive, entry, root) {
   }
 
   const fileId = entry.fileId;
-  const response = await drive.files.get({
-    fileId,
-    fields: "id,name,mimeType",
-  });
+  let fileMeta = {
+    id: fileId,
+    name: path.posix.basename(entry.remotePath || entry.path || fileId),
+    mimeType: entry.remoteMimeType || "",
+    md5Checksum: entry.remoteMd5Checksum || null,
+  };
 
-  await downloadFile(drive, { ...response.data, id: fileId }, localAbsolutePath);
+  if (!entry.remoteMimeType) {
+    const response = await drive.files.get({
+      fileId,
+      fields: "id,name,mimeType,md5Checksum",
+    });
+    fileMeta = { ...response.data, id: fileId };
+  }
+
+  await downloadFile(drive, fileMeta, localAbsolutePath);
 }
 
 async function handleMissingUploadSource(drive, entry, snapshot, driveFolderId) {
@@ -145,14 +158,33 @@ async function uploadStagedFile(drive, entry, root, driveFolderId, snapshot) {
   // Verify: Drive-returned md5 must match the local file we just uploaded.
   // Google Workspace files (Docs, Sheets, etc.) don't have md5 — skip them.
   if (uploadResult?.md5Checksum) {
-    let localMd5;
+    const currentModifiedTime = new Date(localStat.mtimeMs).toISOString();
+    let postUploadStat;
     try {
-      localMd5 = await md5Local(localAbsolutePath);
+      postUploadStat = await fs.promises.lstat(localAbsolutePath);
     } catch (err) {
       if (isMissingLocalFileError(err)) {
         return "uploaded";
       }
       throw err;
+    }
+    const stagedMetadataMatches =
+      entry.localMd5 &&
+      entry.localSize === localStat.size &&
+      entry.localModifiedTime === currentModifiedTime &&
+      postUploadStat.size === localStat.size &&
+      postUploadStat.mtimeMs === localStat.mtimeMs;
+
+    let localMd5 = stagedMetadataMatches ? entry.localMd5 : null;
+    if (!localMd5) {
+      try {
+        localMd5 = await md5Local(localAbsolutePath);
+      } catch (err) {
+        if (isMissingLocalFileError(err)) {
+          return "uploaded";
+        }
+        throw err;
+      }
     }
     if (localMd5 !== uploadResult.md5Checksum) {
       throw new Error(

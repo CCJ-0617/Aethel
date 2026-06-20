@@ -154,12 +154,66 @@ test("stageChange preserves remote-deleted folder metadata", () => {
   }
 });
 
+test("stageChange preserves transfer metadata for upload and download", () => {
+  const root = makeTmpWorkspace();
+  try {
+    const repo = new Repository(root);
+    repo.stageChange({
+      path: "upload.txt",
+      suggestedAction: "upload",
+      localMeta: {
+        localPath: "upload.txt",
+        md5: "local-md5",
+        size: 42,
+        modifiedTime: "2026-06-20T01:02:03.000Z",
+      },
+    });
+    repo.stageChange({
+      path: "download.txt",
+      suggestedAction: "download",
+      fileId: "remote-id",
+      remoteMeta: {
+        path: "download.txt",
+        mimeType: "text/plain",
+        md5Checksum: "remote-md5",
+      },
+    });
+
+    assert.deepEqual(repo.getStagedEntries(), [
+      {
+        action: "upload",
+        path: "upload.txt",
+        localPath: "upload.txt",
+        localMd5: "local-md5",
+        localSize: 42,
+        localModifiedTime: "2026-06-20T01:02:03.000Z",
+      },
+      {
+        action: "download",
+        path: "download.txt",
+        localPath: "download.txt",
+        fileId: "remote-id",
+        remotePath: "download.txt",
+        remoteMimeType: "text/plain",
+        remoteMd5Checksum: "remote-md5",
+      },
+    ]);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test("stageRemoteFilesForDownload stages full remote downloads", () => {
   const root = makeTmpWorkspace();
   try {
     const repo = new Repository(root);
     const count = repo.stageRemoteFilesForDownload([
-      { id: "file-1", path: "docs/spec.txt" },
+      {
+        id: "file-1",
+        path: "docs/spec.txt",
+        mimeType: "text/plain",
+        md5Checksum: "remote-md5",
+      },
       { id: "folder-1", path: "empty-dir", isFolder: true },
     ]);
     const staged = repo.getStagedEntries();
@@ -171,6 +225,8 @@ test("stageRemoteFilesForDownload stages full remote downloads", () => {
         localPath: "docs/spec.txt",
         fileId: "file-1",
         remotePath: "docs/spec.txt",
+        remoteMimeType: "text/plain",
+        remoteMd5Checksum: "remote-md5",
       },
       {
         action: "download",

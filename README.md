@@ -302,11 +302,12 @@ want Drive items deleted instead of trashed.
 
 ## Environment Variables
 
-| Variable                          | Default                               | Description                       |
-| --------------------------------- | ------------------------------------- | --------------------------------- |
-| `GOOGLE_DRIVE_CREDENTIALS_PATH` | `~/.config/aethel/credentials.json` | Path to OAuth credentials         |
-| `GOOGLE_DRIVE_TOKEN_PATH`       | `~/.config/aethel/token.json`       | Path to cached OAuth token        |
-| `AETHEL_DRIVE_CONCURRENCY`      | `40`                                | Max concurrent Drive API requests |
+| Variable                        | Default                             | Description                                      |
+| ------------------------------- | ----------------------------------- | ------------------------------------------------ |
+| `GOOGLE_DRIVE_CREDENTIALS_PATH` | `~/.config/aethel/credentials.json` | Path to OAuth credentials                        |
+| `GOOGLE_DRIVE_TOKEN_PATH`       | `~/.config/aethel/token.json`       | Path to cached OAuth token                       |
+| `AETHEL_DRIVE_CONCURRENCY`      | `40`                                | Max concurrent Drive API requests                |
+| `AETHEL_TRANSFER_CONCURRENCY`   | `20`                                | Max concurrent upload/download/delete operations |
 
 ## Architecture
 

@@ -596,6 +596,50 @@ test("executeStaged does not create duplicate folders during concurrent uploads"
   }
 });
 
+test("executeStaged downloads staged files without an extra metadata request", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-fast-download-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    const content = Buffer.from("downloaded content");
+    writeIndex(workspaceRoot, {
+      staged: [
+        {
+          action: "download",
+          path: "fast.txt",
+          localPath: "fast.txt",
+          fileId: "remote-fast",
+          remotePath: "fast.txt",
+          remoteMimeType: "text/plain",
+          remoteMd5Checksum: md5(content),
+        },
+      ],
+    });
+
+    let metadataGets = 0;
+    let mediaGets = 0;
+    const result = await executeStaged({
+      files: {
+        async get(params) {
+          if (params.alt === "media") {
+            mediaGets += 1;
+            return { data: Readable.from([content]) };
+          }
+          metadataGets += 1;
+          throw new Error("metadata should already be staged");
+        },
+      },
+    }, workspaceRoot);
+
+    assert.equal(result.downloaded, 1);
+    assert.equal(metadataGets, 0);
+    assert.equal(mediaGets, 1);
+    assert.equal(await fs.readFile(path.join(workspaceRoot, "fast.txt"), "utf8"), "downloaded content");
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("executeStaged resolves legacy delete_remote entries from snapshot path", async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
 

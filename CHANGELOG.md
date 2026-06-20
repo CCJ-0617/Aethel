@@ -20,6 +20,8 @@
   with Drive change tokens to avoid repeated full remote listings.
 - Keep `status` fast by reusing the local remote cache even after the normal
   short cache TTL expires.
+- Speed up staged file transfers by carrying checksum metadata into commits,
+  skipping redundant download metadata calls, and raising transfer concurrency.
 
 ## 1.3.3 (2026-06-20)
 

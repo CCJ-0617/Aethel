@@ -19,6 +19,26 @@ function changeToEntry(change) {
     entry.remotePath = change.remoteMeta.path;
   }
 
+  if (change.remoteMeta?.mimeType) {
+    entry.remoteMimeType = change.remoteMeta.mimeType;
+  }
+
+  if (change.remoteMeta?.md5Checksum) {
+    entry.remoteMd5Checksum = change.remoteMeta.md5Checksum;
+  }
+
+  if (change.localMeta?.md5) {
+    entry.localMd5 = change.localMeta.md5;
+  }
+
+  if (Number.isFinite(change.localMeta?.size)) {
+    entry.localSize = change.localMeta.size;
+  }
+
+  if (change.localMeta?.modifiedTime) {
+    entry.localModifiedTime = change.localMeta.modifiedTime;
+  }
+
   // Propagate folder flag so sync knows to create folder instead of uploading file
   if (change.localMeta?.isFolder || change.remoteMeta?.isFolder || change.snapshotMeta?.isFolder) {
     entry.isFolder = true;
@@ -65,6 +85,8 @@ export function stageRemoteFilesForDownload(root, remoteFiles) {
       localPath: remoteFile.path,
       fileId: remoteFile.id,
       remotePath: remoteFile.path,
+      ...(remoteFile.mimeType ? { remoteMimeType: remoteFile.mimeType } : {}),
+      ...(remoteFile.md5Checksum ? { remoteMd5Checksum: remoteFile.md5Checksum } : {}),
       ...(remoteFile.isFolder ? { isFolder: true } : {}),
     });
   }
@@ -170,6 +192,9 @@ export function stageConflictResolution(root, change, strategy) {
       localPath: change.localMeta?.localPath || change.path,
       fileId: change.fileId,
       remotePath: change.remoteMeta?.path || change.path,
+      ...(change.localMeta?.md5 ? { localMd5: change.localMeta.md5 } : {}),
+      ...(Number.isFinite(change.localMeta?.size) ? { localSize: change.localMeta.size } : {}),
+      ...(change.localMeta?.modifiedTime ? { localModifiedTime: change.localMeta.modifiedTime } : {}),
     });
 
     index.staged = staged;
