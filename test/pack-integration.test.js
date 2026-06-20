@@ -4,9 +4,11 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fsNative from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 
 import { scanLocal, buildSnapshot } from "../src/core/snapshot.js";
 import { computeDiff, ChangeType } from "../src/core/diff.js";
@@ -89,6 +91,37 @@ test("scanLocal returns both files and packedDirs when packing enabled", async (
     assert.equal(result.packedDirs["node_modules"].isPacked, true);
     assert.ok(result.packedDirs["node_modules"].treeHash.startsWith("sha256:"));
   } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("scanLocal skips files that disappear before hashing", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pack-int-vanish-"));
+  const originalCreateReadStream = fsNative.createReadStream;
+
+  try {
+    const root = await createTestWorkspace(tempDir);
+    const vanishingPath = path.join(root, "vanishing.txt");
+    await fs.writeFile(vanishingPath, "gone soon");
+    await fs.writeFile(path.join(root, "stable.txt"), "keep");
+
+    fsNative.createReadStream = function patchedCreateReadStream(filePath, ...args) {
+      if (path.resolve(String(filePath)) === vanishingPath) {
+        const stream = new PassThrough();
+        const err = new Error(`ENOENT: no such file or directory, open '${filePath}'`);
+        err.code = "ENOENT";
+        process.nextTick(() => stream.destroy(err));
+        return stream;
+      }
+      return originalCreateReadStream.call(this, filePath, ...args);
+    };
+
+    const result = await scanLocal(root);
+
+    assert.ok(result.files["stable.txt"]);
+    assert.equal(result.files["vanishing.txt"], undefined);
+  } finally {
+    fsNative.createReadStream = originalCreateReadStream;
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 });

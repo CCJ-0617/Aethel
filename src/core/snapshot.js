@@ -7,6 +7,10 @@ import { getTreeHash } from "./pack.js";
 
 const HASH_CACHE_FILE = ".hash-cache.json";
 
+function isMissingLocalFileError(err) {
+  return err?.code === "ENOENT" || err?.code === "ENOTDIR";
+}
+
 export async function md5Local(filePath) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash("md5");
@@ -180,9 +184,16 @@ export async function scanLocal(root, { respectIgnore = true, respectPacking = t
 
       trackedChildren++;
       statPromises.push(
-        fs.promises.stat(fullPath).then((stat) => {
-          filesToHash.push({ fullPath, relativePath, stat });
-        })
+        fs.promises
+          .stat(fullPath)
+          .then((stat) => {
+            filesToHash.push({ fullPath, relativePath, stat });
+          })
+          .catch((err) => {
+            if (!isMissingLocalFileError(err)) {
+              throw err;
+            }
+          })
       );
     }
 
@@ -205,12 +216,23 @@ export async function scanLocal(root, { respectIgnore = true, respectPacking = t
     const batch = filesToHash.slice(i, i + PARALLEL_HASH_LIMIT);
     const hashes = await Promise.all(
       batch.map(async ({ fullPath, relativePath, stat }) => {
-        const md5 = await getMd5Cached(hashCache, nextCache, fullPath, relativePath, stat);
-        return { relativePath, stat, md5 };
+        try {
+          const md5 = await getMd5Cached(hashCache, nextCache, fullPath, relativePath, stat);
+          return { relativePath, stat, md5 };
+        } catch (err) {
+          if (isMissingLocalFileError(err)) {
+            return null;
+          }
+          throw err;
+        }
       })
     );
 
-    for (const { relativePath, stat, md5 } of hashes) {
+    for (const hashResult of hashes) {
+      if (!hashResult) {
+        continue;
+      }
+      const { relativePath, stat, md5 } = hashResult;
       result[relativePath] = {
         localPath: relativePath,
         size: stat.size,

@@ -760,6 +760,10 @@ function isMissingDriveFileError(err) {
   return err?.code === 404 || err?.response?.status === 404;
 }
 
+function isMissingLocalFileError(err) {
+  return err?.code === "ENOENT" || err?.code === "ENOTDIR";
+}
+
 async function findUploadTargetByName(drive, parentId, name) {
   const matches = await listMatchingChildren(drive, parentId, name);
   return matches.find((item) => item.mimeType !== FOLDER_MIME) || null;
@@ -1644,13 +1648,21 @@ async function uploadLocalFileToParent(
   }
 
   onProgress?.("upload", localPath, fileName);
-  await uploadFile(drive, localPath, fileName, {
-    parentId,
-    existingId:
-      existing && existing.mimeType !== "application/vnd.google-apps.folder"
-        ? existing.id
-        : null,
-  });
+  try {
+    await uploadFile(drive, localPath, fileName, {
+      parentId,
+      existingId:
+        existing && existing.mimeType !== "application/vnd.google-apps.folder"
+          ? existing.id
+          : null,
+    });
+  } catch (err) {
+    if (isMissingLocalFileError(err)) {
+      onProgress?.("skip", localPath, fileName);
+      return { uploadedFiles: 0, uploadedDirectories: 0 };
+    }
+    throw err;
+  }
 
   return { uploadedFiles: 1, uploadedDirectories: 0 };
 }

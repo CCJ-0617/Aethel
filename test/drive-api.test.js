@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import fsNative from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -826,6 +827,55 @@ test("syncLocalDirectoryToParent skips paths ignored by .aethelignore", async ()
       liveItems.some((item) => item.mimeType === FOLDER_MIME && item.name === "venv"),
       false
     );
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("syncLocalDirectoryToParent skips built-in nested Rust target directories", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-target-ignore-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    await fs.mkdir(path.join(workspaceRoot, "src-tauri", "target", "debug"), { recursive: true });
+    await fs.mkdir(path.join(workspaceRoot, "src-tauri", "src"), { recursive: true });
+    await fs.writeFile(path.join(workspaceRoot, "src-tauri", "target", "debug", "app.d"), "skip");
+    await fs.writeFile(path.join(workspaceRoot, "src-tauri", "src", "main.rs"), "keep");
+
+    const drive = createFakeDrive([]);
+    const result = await syncLocalDirectoryToParent(drive, workspaceRoot, "root");
+
+    assert.equal(result.uploadedFiles, 1);
+    const liveItems = drive.snapshot().filter((item) => !item.trashed);
+    assert.equal(liveItems.some((item) => item.name === "main.rs"), true);
+    assert.equal(liveItems.some((item) => item.name === "app.d"), false);
+    assert.equal(
+      liveItems.some((item) => item.mimeType === FOLDER_MIME && item.name === "target"),
+      false
+    );
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("syncLocalDirectoryToParent skips files that disappear during upload", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-vanishing-upload-"));
+
+  try {
+    await fs.writeFile(path.join(workspaceRoot, "volatile.txt"), "gone soon");
+
+    const drive = createFakeDrive([]);
+    const progress = [];
+    const result = await syncLocalDirectoryToParent(drive, workspaceRoot, "root", (type, filePath, name) => {
+      progress.push({ type, name });
+      if (type === "upload" && name === "volatile.txt") {
+        fsNative.unlinkSync(filePath);
+      }
+    });
+
+    assert.equal(result.uploadedFiles, 0);
+    assert.deepEqual(progress.map((entry) => entry.type), ["upload", "skip"]);
+    assert.equal(drive.snapshot().some((item) => item.name === "volatile.txt"), false);
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }

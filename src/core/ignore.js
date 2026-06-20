@@ -21,6 +21,10 @@ const BUILTIN_PATTERNS = [
   ".git/**",
   "node_modules",
   "node_modules/**",
+  "target",
+  "target/**",
+  "**/target",
+  "**/target/**",
   ".DS_Store",
   "Thumbs.db",
 ];
@@ -128,6 +132,7 @@ __pycache__/
 # Build output
 dist/
 build/
+target/
 *.pyc
 *.o
 *.so
