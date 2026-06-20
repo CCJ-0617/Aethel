@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.5 (2026-06-20)
+
+- Keep status fast by reusing the local remote cache instead of refreshing Drive on every stale cache.
+
 ## 1.3.4 (2026-06-20)
 
 - Improve Drive remote fetch performance with scoped folder scans and Drive-side memo caching.
