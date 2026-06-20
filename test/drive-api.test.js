@@ -4,6 +4,7 @@ import fsNative from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { initWorkspace, readIndex, writeIndex, writeSnapshot } from "../src/core/config.js";
@@ -77,7 +78,18 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
   const items = new Map(initialItems.map((item) => [item.id, clone(item)]));
   let sequence = 0;
   let idCounter = 1000;
+  let changeSequence = 0;
+  const changesLog = [];
   const listQueries = [];
+
+  function recordChange(item, removed = false) {
+    changesLog.push({
+      seq: ++changeSequence,
+      fileId: item.id,
+      removed,
+      file: removed ? undefined : clone(item),
+    });
+  }
 
   function decodeQueryValue(value) {
     return value.replace(/\\\\/g, "\\").replace(/\\'/g, "'");
@@ -178,8 +190,10 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
             canRename: true,
           },
           trashed: false,
+          _body: body.toString("utf8"),
         };
         items.set(id, item);
+        recordChange(item);
         return { data: clone(item) };
       },
       async update({ fileId, requestBody = {}, addParents, removeParents, media }) {
@@ -214,18 +228,24 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
         }
 
         if (body.length && item.mimeType !== FOLDER_MIME) {
+          item._body = body.toString("utf8");
           item.md5Checksum = md5(body);
           item.size = body.length;
         }
 
         touch(item);
+        recordChange(item);
         return { data: clone(item) };
       },
       async delete({ fileId }) {
+        const item = items.get(fileId);
         items.delete(fileId);
+        if (item) {
+          recordChange(item, true);
+        }
         return { data: {} };
       },
-      async get({ fileId }) {
+      async get({ fileId, alt }) {
         if (fileId === "root") {
           return {
             data: {
@@ -241,7 +261,27 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
           };
         }
 
+        if (alt === "media") {
+          return { data: Readable.from([items.get(fileId)?._body || ""]) };
+        }
+
         return { data: clone(items.get(fileId)) };
+      },
+    },
+    changes: {
+      async getStartPageToken() {
+        return { data: { startPageToken: String(changeSequence) } };
+      },
+      async list({ pageToken }) {
+        const since = Number(pageToken || 0);
+        return {
+          data: {
+            changes: changesLog
+              .filter((change) => change.seq > since)
+              .map(({ seq, ...change }) => clone(change)),
+            newStartPageToken: String(changeSequence),
+          },
+        };
       },
     },
     snapshot() {
@@ -251,6 +291,9 @@ function createFakeDrive(initialItems = [], { listDelayMs = 0 } = {}) {
     },
     listQueries() {
       return [...listQueries];
+    },
+    clearListQueries() {
+      listQueries.length = 0;
     },
   };
 }
@@ -441,7 +484,7 @@ test("getRemoteState walks only the configured Drive folder tree", async () => {
     drive.listQueries().some((query) => query === "trashed = false"),
     false
   );
-  assert.deepEqual(drive.listQueries(), [
+  assert.deepEqual(drive.listQueries().filter((query) => query.includes(" in parents ")), [
     "'project' in parents and trashed = false",
     "'docs' in parents and trashed = false",
     "'empty' in parents and trashed = false",
@@ -465,6 +508,43 @@ test("getRemoteState uses global fetch for large configured folder snapshots", a
   assert.equal(
     drive.listQueries().some((query) => query === "trashed = false"),
     true
+  );
+});
+
+test("getRemoteState reuses Drive memo and applies incremental changes", async () => {
+  const drive = createFakeDrive([
+    folder("project", "Project", "real-my-drive-root", "2026-04-04T10:00:00.000Z"),
+    file("inside", "inside.txt", "project", "2026-04-04T10:02:00.000Z", "inside"),
+    folder("outside", "Outside", "real-my-drive-root", "2026-04-04T10:04:00.000Z"),
+    file("outside-file", "outside.txt", "outside", "2026-04-04T10:05:00.000Z", "outside"),
+  ]);
+
+  const options = { estimatedRemoteFiles: 50_000 };
+  const firstState = await getRemoteState(drive, "project", null, options);
+  assert.deepEqual(firstState.files.map((item) => item.path), ["inside.txt"]);
+  assert.equal(
+    drive.listQueries().some((query) => query === "trashed = false"),
+    true
+  );
+
+  drive.clearListQueries();
+  await drive.files.create({
+    requestBody: {
+      name: "new.txt",
+      parents: ["project"],
+    },
+    media: { body: Readable.from(["new"]) },
+  });
+
+  const secondState = await getRemoteState(drive, "project", null, options);
+
+  assert.deepEqual(
+    secondState.files.map((item) => item.path).sort(),
+    ["inside.txt", "new.txt"]
+  );
+  assert.equal(
+    drive.listQueries().some((query) => query === "trashed = false"),
+    false
   );
 });
 

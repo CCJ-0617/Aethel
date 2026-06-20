@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { findRoot } from "./config.js";
 import { loadIgnoreRules } from "./ignore.js";
@@ -11,6 +13,10 @@ const DEFAULT_ITEM_FIELDS =
   "nextPageToken, files(id, name, mimeType, size, modifiedTime, createdTime, md5Checksum, parents)";
 const CHILD_QUERY_FIELDS =
   "nextPageToken, files(id,name,mimeType,parents,createdTime,modifiedTime,md5Checksum,size,capabilities(canAddChildren,canEdit,canTrash,canDelete,canRename))";
+const REMOTE_MEMO_VERSION = 1;
+const REMOTE_MEMO_PREFIX = ".aethel-remote-memo-";
+const REMOTE_MEMO_FIELDS =
+  "nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,size,modifiedTime,createdTime,md5Checksum,parents,trashed))";
 
 function readPositiveIntEnv(name, fallback) {
   const rawValue = Number.parseInt(process.env[name] || "", 10);
@@ -121,6 +127,48 @@ function escapeDriveQueryValue(value) {
     .replace(/\\/g, "\\\\")
     .replace(/'/g, "\\'")
     .replace(/"/g, '\\"');
+}
+
+function remoteMemoEnabled(rootFolderId, { estimatedRemoteFiles = null, fetchMode = null } = {}) {
+  if (!rootFolderId) {
+    return false;
+  }
+  const mode = String(fetchMode || process.env.AETHEL_REMOTE_MEMO || "auto").toLowerCase();
+  if (["0", "false", "off"].includes(mode)) {
+    return false;
+  }
+  if (["1", "true", "on", "force"].includes(mode)) {
+    return true;
+  }
+  return Number.isFinite(estimatedRemoteFiles) &&
+    estimatedRemoteFiles > SCOPED_FETCH_MAX_SNAPSHOT_FILES;
+}
+
+function remoteMemoName(rootFolderId) {
+  const hash = crypto
+    .createHash("sha256")
+    .update(String(rootFolderId || "root"))
+    .digest("hex")
+    .slice(0, 24);
+  return `${REMOTE_MEMO_PREFIX}${hash}.json`;
+}
+
+function isRemoteMemoItem(item) {
+  return String(item?.name || "").startsWith(REMOTE_MEMO_PREFIX);
+}
+
+function serializeRawRemoteItems({ folders, files }) {
+  return {
+    folders: [...folders.values()].filter((item) => !isRemoteMemoItem(item)),
+    files: files.filter((item) => !isRemoteMemoItem(item)),
+  };
+}
+
+function deserializeRawRemoteItems(raw) {
+  return {
+    folders: new Map((raw?.folders || []).map((folder) => [folder.id, folder])),
+    files: raw?.files || [],
+  };
 }
 
 export function iconForMime(mime) {
@@ -366,6 +414,227 @@ async function fetchRemoteItems(drive, rootFolderId = null, options = {}) {
   return fetchAllItems(drive, options);
 }
 
+async function findRemoteMemoFile(drive, rootFolderId) {
+  const response = await drive.files.list({
+    q:
+      `'${escapeDriveQueryValue(rootFolderId)}' in parents and ` +
+      `name = '${escapeDriveQueryValue(remoteMemoName(rootFolderId))}' and ` +
+      "trashed = false",
+    fields: "files(id,name,modifiedTime)",
+    pageSize: 1,
+  });
+  return response.data.files?.[0] || null;
+}
+
+async function readRemoteMemo(drive, rootFolderId) {
+  const memoFile = await findRemoteMemoFile(drive, rootFolderId);
+  if (!memoFile?.id) {
+    return null;
+  }
+
+  const response = await drive.files.get(
+    { fileId: memoFile.id, alt: "media" },
+    { responseType: "stream" }
+  );
+  const chunks = [];
+  for await (const chunk of response.data) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const memo = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+
+  if (
+    memo.version !== REMOTE_MEMO_VERSION ||
+    (memo.rootFolderId ?? null) !== (rootFolderId ?? null) ||
+    !memo.startPageToken ||
+    !Array.isArray(memo.folders) ||
+    !Array.isArray(memo.files)
+  ) {
+    return null;
+  }
+
+  return { ...memo, fileId: memoFile.id };
+}
+
+async function writeRemoteMemo(
+  drive,
+  rootFolderId,
+  rawItems,
+  startPageToken,
+  existingFileId = null,
+  options = {}
+) {
+  if (!remoteMemoEnabled(rootFolderId, options) || !startPageToken) {
+    return;
+  }
+
+  const body = JSON.stringify(
+    {
+      version: REMOTE_MEMO_VERSION,
+      rootFolderId: rootFolderId ?? null,
+      updatedAt: new Date().toISOString(),
+      startPageToken,
+      ...serializeRawRemoteItems(rawItems),
+    }
+  );
+  const media = {
+    mimeType: "application/json",
+    body: Readable.from([body]),
+  };
+
+  if (existingFileId) {
+    await drive.files.update({
+      fileId: existingFileId,
+      requestBody: { name: remoteMemoName(rootFolderId) },
+      media,
+      fields: "id",
+    });
+    return;
+  }
+
+  await drive.files.create({
+    requestBody: {
+      name: remoteMemoName(rootFolderId),
+      parents: [rootFolderId],
+    },
+    media,
+    fields: "id",
+  });
+}
+
+async function getStartPageToken(drive) {
+  const response = await drive.changes.getStartPageToken({
+    fields: "startPageToken",
+    supportsAllDrives: true,
+  });
+  return response.data.startPageToken || null;
+}
+
+function isChangeTokenExpired(err) {
+  return err?.code === 410 || err?.response?.status === 410;
+}
+
+function itemParentId(item) {
+  return item?.parents?.[0] || "";
+}
+
+function itemIsInsideMemoTree(item, trackedFolderIds, rootFolderId) {
+  const parentId = itemParentId(item);
+  return parentId === rootFolderId || trackedFolderIds.has(parentId);
+}
+
+function applyChangedItemsToMemo(memo, changes, rootFolderId) {
+  const items = new Map();
+  for (const folder of memo.folders || []) {
+    if (folder?.id) items.set(folder.id, folder);
+  }
+  for (const file of memo.files || []) {
+    if (file?.id) items.set(file.id, file);
+  }
+
+  for (const change of changes) {
+    if (change.removed || change.file?.trashed) {
+      items.delete(change.fileId);
+    }
+  }
+
+  const pending = changes
+    .filter((change) =>
+      !change.removed &&
+      !change.file?.trashed &&
+      change.file?.id &&
+      !isRemoteMemoItem(change.file)
+    )
+    .map((change) => change.file);
+
+  let changed = true;
+  while (changed && pending.length > 0) {
+    changed = false;
+    const trackedFolderIds = new Set(
+      [...items.values()]
+        .filter((item) => item.mimeType === FOLDER_MIME)
+        .map((item) => item.id)
+    );
+    trackedFolderIds.add(rootFolderId);
+
+    for (let index = pending.length - 1; index >= 0; index--) {
+      const item = pending[index];
+      const wasTracked = items.has(item.id);
+      const isRoot = item.id === rootFolderId;
+      const isInside = isRoot || itemIsInsideMemoTree(item, trackedFolderIds, rootFolderId);
+
+      if (wasTracked || isInside) {
+        items.set(item.id, item);
+        pending.splice(index, 1);
+        changed = true;
+      }
+    }
+  }
+
+  const folders = new Map();
+  const files = [];
+  for (const item of items.values()) {
+    if (isRemoteMemoItem(item)) {
+      continue;
+    }
+    if (item.mimeType === FOLDER_MIME) {
+      folders.set(item.id, item);
+    } else {
+      files.push(item);
+    }
+  }
+
+  return { folders, files };
+}
+
+async function applyRemoteMemoChanges(drive, memo, rootFolderId) {
+  const changes = [];
+  let pageToken = memo.startPageToken;
+  let nextStartPageToken = null;
+
+  do {
+    const response = await drive.changes.list({
+      pageToken,
+      fields: REMOTE_MEMO_FIELDS,
+      spaces: "drive",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+      pageSize: PAGE_SIZE,
+    });
+
+    changes.push(...(response.data.changes || []));
+    pageToken = response.data.nextPageToken || null;
+    nextStartPageToken = response.data.newStartPageToken || nextStartPageToken;
+  } while (pageToken);
+
+  return {
+    rawItems: applyChangedItemsToMemo(memo, changes, rootFolderId),
+    startPageToken: nextStartPageToken || memo.startPageToken,
+    memoFileId: memo.fileId,
+  };
+}
+
+async function fetchMemoizedRemoteItems(drive, rootFolderId, options = {}) {
+  if (!remoteMemoEnabled(rootFolderId, options)) {
+    return null;
+  }
+
+  try {
+    const memo = await readRemoteMemo(drive, rootFolderId);
+    if (!memo) {
+      return null;
+    }
+    return await applyRemoteMemoChanges(drive, memo, rootFolderId);
+  } catch (err) {
+    if (isChangeTokenExpired(err)) {
+      return null;
+    }
+    if (options.debugRemoteMemo) {
+      throw err;
+    }
+    return null;
+  }
+}
+
 /**
  * Build a cached orphan checker. A folder is "orphaned" if its parent
  * chain leads to a trashed/inaccessible folder rather than "root".
@@ -418,6 +687,7 @@ function buildRemoteFiles(folders, rawFiles, rootFolderId = null) {
   const foldersWithChildren = new Set();
 
   for (const file of rawFiles) {
+    if (isRemoteMemoItem(file)) continue;
     const parentId = file.parents?.[0] || "";
 
     // Skip files whose parent folder was trashed (orphaned children)
@@ -443,12 +713,14 @@ function buildRemoteFiles(folders, rawFiles, rootFolderId = null) {
 
   // Mark folders that have subfolders as children
   for (const folder of folders.values()) {
+    if (isRemoteMemoItem(folder)) continue;
     const parentId = folder.parents?.[0] || "";
     if (parentId) foldersWithChildren.add(parentId);
   }
 
   // Include empty folders (no file children AND no subfolder children)
   for (const folder of folders.values()) {
+    if (isRemoteMemoItem(folder)) continue;
     if (foldersWithChildren.has(folder.id)) continue;
     if (isOrphaned(folder.id)) continue;
 
@@ -477,6 +749,7 @@ function buildRemoteItems(folders, rawFiles, rootFolderId = null) {
   const items = [];
 
   for (const folder of folders.values()) {
+    if (isRemoteMemoItem(folder)) continue;
     if (folder.id === "root" || folder.id === rootFolderId) continue;
     if (isOrphaned(folder.id)) continue;
 
@@ -497,6 +770,7 @@ function buildRemoteItems(folders, rawFiles, rootFolderId = null) {
   }
 
   for (const file of rawFiles) {
+    if (isRemoteMemoItem(file)) continue;
     const parentId = file.parents?.[0] || "";
     if (parentId && isOrphaned(parentId)) continue;
 
@@ -547,6 +821,9 @@ function buildDuplicateFolderGroups(folders, rootFolderId = null, ignoreRules = 
   const groups = new Map();
 
   for (const folder of folders.values()) {
+    if (isRemoteMemoItem(folder)) {
+      continue;
+    }
     const folderPath = resolve(folder.id);
     if (rootFolderId && folderPath === null) {
       continue;
@@ -627,6 +904,9 @@ function buildDuplicateFileGroups(folders, rawFiles, rootFolderId = null, ignore
   const groups = new Map();
 
   for (const file of rawFiles) {
+    if (isRemoteMemoItem(file)) {
+      continue;
+    }
     const parentId = file.parents?.[0] || "";
 
     if (parentId && isOrphaned(parentId)) {
@@ -705,7 +985,33 @@ export class DuplicateFoldersError extends Error {
 }
 
 export async function getRemoteState(drive, rootFolderId = null, ignoreRules = null, options = {}) {
-  const { folders, files } = await fetchRemoteItems(drive, rootFolderId, options);
+  let rawItems = null;
+  let memoStartPageToken = null;
+  let memoFileId = null;
+
+  const memoResult = await fetchMemoizedRemoteItems(drive, rootFolderId, options);
+  if (memoResult) {
+    rawItems = memoResult.rawItems;
+    memoStartPageToken = memoResult.startPageToken;
+    memoFileId = memoResult.memoFileId;
+  }
+
+  if (!rawItems) {
+    const startPageTokenPromise = remoteMemoEnabled(rootFolderId, options) && drive.changes
+      ? getStartPageToken(drive).catch(() => null)
+      : Promise.resolve(null);
+    rawItems = await fetchRemoteItems(drive, rootFolderId, options);
+    memoStartPageToken = await startPageTokenPromise;
+  }
+
+  if (memoStartPageToken) {
+    await writeRemoteMemo(drive, rootFolderId, rawItems, memoStartPageToken, memoFileId, options)
+      .catch((err) => {
+        if (options.debugRemoteMemo) throw err;
+      });
+  }
+
+  const { folders, files } = rawItems;
   return {
     files: buildRemoteFiles(folders, files, rootFolderId),
     duplicateFolders: buildDuplicateFolderGroups(folders, rootFolderId, ignoreRules),

@@ -8,6 +8,8 @@
   deletion.
 - Fetch small configured Drive folder workspaces by walking only that folder
   tree, while keeping the global Drive listing for large snapshots.
+- Store a Drive-side remote memo for large folder workspaces and refresh it
+  with Drive change tokens to avoid repeated full remote listings.
 
 ## 1.3.3 (2026-06-20)
 
