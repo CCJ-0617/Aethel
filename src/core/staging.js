@@ -20,7 +20,7 @@ function changeToEntry(change) {
   }
 
   // Propagate folder flag so sync knows to create folder instead of uploading file
-  if (change.localMeta?.isFolder || change.remoteMeta?.isFolder) {
+  if (change.localMeta?.isFolder || change.remoteMeta?.isFolder || change.snapshotMeta?.isFolder) {
     entry.isFolder = true;
   }
 

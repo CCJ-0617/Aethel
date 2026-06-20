@@ -124,6 +124,35 @@ test("stageChanges stages multiple and returns count", () => {
   }
 });
 
+test("stageChange preserves remote-deleted folder metadata", () => {
+  const root = makeTmpWorkspace();
+  try {
+    const repo = new Repository(root);
+    repo.stageChange({
+      path: "removed-folder",
+      suggestedAction: "delete_local",
+      fileId: "folder-id",
+      snapshotMeta: {
+        path: "removed-folder",
+        isFolder: true,
+      },
+    });
+
+    assert.deepEqual(repo.getStagedEntries(), [
+      {
+        action: "delete_local",
+        path: "removed-folder",
+        localPath: "removed-folder",
+        fileId: "folder-id",
+        isFolder: true,
+        recursiveLocalDelete: true,
+      },
+    ]);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test("stageRemoteFilesForDownload stages full remote downloads", () => {
   const root = makeTmpWorkspace();
   try {

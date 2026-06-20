@@ -4,6 +4,8 @@
 
 - Make `pull` fetch fresh Drive state by default so remote deletions are applied
   locally instead of being hidden by a stale remote cache.
+- Preserve folder metadata when staging remote-deleted folders for local
+  deletion.
 
 ## 1.3.3 (2026-06-20)
 
