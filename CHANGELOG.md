@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2 (2026-06-20)
+
+- Fix remote-deleted folder commits
+
 ## Unreleased
 
 - No unreleased changes.
