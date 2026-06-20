@@ -641,7 +641,7 @@ test("downloadFile rejects unsupported Google Workspace files before media downl
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-download-"));
 
   try {
-    const localPath = path.join(workspaceRoot, ".claude");
+    const localPath = path.join(workspaceRoot, "workspace-doc");
     const drive = {
       files: {
         async get() {
@@ -658,12 +658,12 @@ test("downloadFile rejects unsupported Google Workspace files before media downl
         drive,
         {
           id: "workspace-file",
-          name: ".claude",
+          name: "workspace-doc",
           mimeType: "application/vnd.google-apps.script",
         },
         localPath
       ),
-      /Cannot download Google Workspace file '.claude'/
+      /Cannot download Google Workspace file 'workspace-doc'/
     );
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });

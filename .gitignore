@@ -1,7 +1,7 @@
 node_modules/
 .DS_Store
 .aethel/
-.claude/
+.aethel-local/
 
 # Credentials / secrets
 credentials.json

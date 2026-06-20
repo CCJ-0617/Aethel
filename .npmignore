@@ -7,7 +7,7 @@ client_secret*.json
 
 # Project state
 .aethel/
-.claude/
+.aethel-local/
 
 # Build / editor artifacts
 .DS_Store
