@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.4 (2026-06-20)
+
+- Improve Drive remote fetch performance with scoped folder scans and Drive-side memo caching.
+
 ## Unreleased
 
 - Make `pull` fetch fresh Drive state by default so remote deletions are applied
