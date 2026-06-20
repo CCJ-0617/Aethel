@@ -96,36 +96,51 @@ export function unstageAll(root) {
   return count;
 }
 
+export function conflictResolutionChange(change, strategy) {
+  if (strategy === "theirs") {
+    return {
+      ...change,
+      changeType: "remote_modified",
+      suggestedAction: "download",
+      shortStatus: "MR",
+      description: "modified on Drive",
+    };
+  }
+
+  if (strategy === "ours") {
+    if (!change.localMeta) {
+      return {
+        ...change,
+        changeType: "local_deleted",
+        suggestedAction: "delete_remote",
+        shortStatus: "-L",
+        description: "deleted locally",
+      };
+    }
+
+    return {
+      ...change,
+      changeType: "local_modified",
+      suggestedAction: "upload",
+      shortStatus: "ML",
+      description: "modified locally",
+    };
+  }
+
+  throw new Error(`Unsupported single-change conflict strategy: ${strategy}`);
+}
+
 /**
  * Stage a conflict with an explicit resolution strategy.
  * @param {"ours"|"theirs"|"both"} strategy
  */
 export function stageConflictResolution(root, change, strategy) {
   if (strategy === "theirs") {
-    // Keep remote version → download
-    return stageChange(root, {
-      ...change,
-      changeType: "remote_modified",
-      suggestedAction: "download",
-    });
+    return stageChange(root, conflictResolutionChange(change, strategy));
   }
 
   if (strategy === "ours") {
-    if (!change.localMeta) {
-      // Keep a local deletion → delete the Drive copy
-      return stageChange(root, {
-        ...change,
-        changeType: "local_deleted",
-        suggestedAction: "delete_remote",
-      });
-    }
-
-    // Keep local version → upload
-    return stageChange(root, {
-      ...change,
-      changeType: "local_modified",
-      suggestedAction: "upload",
-    });
+    return stageChange(root, conflictResolutionChange(change, strategy));
   }
 
   if (strategy === "both") {

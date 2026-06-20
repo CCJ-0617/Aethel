@@ -5,6 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Repository } from "../src/core/repository.js";
 import { initWorkspace } from "../src/core/config.js";
+import { conflictResolutionChange } from "../src/core/staging.js";
 
 function makeTmpWorkspace() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aethel-repo-test-"));
@@ -217,6 +218,54 @@ test("stageConflictResolution ours deletes remote when local side is missing", (
   } finally {
     cleanup(root);
   }
+});
+
+test("conflictResolutionChange converts conflicts without staging side effects", () => {
+  const conflict = {
+    path: "notes.md",
+    fileId: "drive-file-id",
+    localMeta: { localPath: "notes.md", md5: "local-md5" },
+    remoteMeta: { path: "notes.md", md5Checksum: "remote-md5" },
+    snapshotMeta: { path: "notes.md", md5: "old-md5" },
+    shortStatus: "!!",
+    description: "both sides changed",
+    suggestedAction: "conflict",
+  };
+
+  assert.deepEqual(
+    {
+      changeType: conflictResolutionChange(conflict, "ours").changeType,
+      suggestedAction: conflictResolutionChange(conflict, "ours").suggestedAction,
+      shortStatus: conflictResolutionChange(conflict, "ours").shortStatus,
+      description: conflictResolutionChange(conflict, "ours").description,
+    },
+    {
+      changeType: "local_modified",
+      suggestedAction: "upload",
+      shortStatus: "ML",
+      description: "modified locally",
+    }
+  );
+
+  assert.deepEqual(
+    {
+      changeType: conflictResolutionChange(conflict, "theirs").changeType,
+      suggestedAction: conflictResolutionChange(conflict, "theirs").suggestedAction,
+      shortStatus: conflictResolutionChange(conflict, "theirs").shortStatus,
+      description: conflictResolutionChange(conflict, "theirs").description,
+    },
+    {
+      changeType: "remote_modified",
+      suggestedAction: "download",
+      shortStatus: "MR",
+      description: "modified on Drive",
+    }
+  );
+
+  const localDeletion = conflictResolutionChange({ ...conflict, localMeta: null }, "ours");
+  assert.equal(localDeletion.changeType, "local_deleted");
+  assert.equal(localDeletion.suggestedAction, "delete_remote");
+  assert.equal(localDeletion.shortStatus, "-L");
 });
 
 test("commitStaged does not save a snapshot when sync has errors", async () => {

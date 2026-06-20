@@ -11,6 +11,8 @@
   failing the sync.
 - Treat stale staged uploads whose local source is gone as local deletions when
   a Drive file exists, and skip them when no remote file exists.
+- Keep `push --dry-run --force` and `pull --dry-run --force` read-only and avoid
+  per-conflict staging writes for large conflict sets.
 
 ## 1.3.1 (2026-06-19)
 

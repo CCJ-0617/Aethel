@@ -34,6 +34,7 @@ import {
 import { createDefaultIgnoreFile, loadIgnoreRules } from "./core/ignore.js";
 import { createProgressBar, createSpinner } from "./core/progress.js";
 import { Repository } from "./core/repository.js";
+import { conflictResolutionChange } from "./core/staging.js";
 import { remoteCacheEnabledByDefault } from "./core/sync-cache-policy.js";
 import { runTui } from "./tui/index.js";
 
@@ -891,14 +892,17 @@ async function handlePull(paths, options) {
       ChangeType.REMOTE_DELETED,
     ].includes(change.changeType)
   );
+  let forcedPullConflictChanges = [];
 
   if (options.force) {
-    const conflicts = diff.conflicts;
-    if (conflicts.length) {
-      console.log(`Force-pulling ${conflicts.length} conflict(s) (remote wins)...`);
-      for (const c of conflicts) {
-        repo.stageConflictResolution(c, "theirs");
-      }
+    forcedPullConflictChanges = diff.conflicts.map((conflict) =>
+      conflictResolutionChange(conflict, "theirs")
+    );
+    if (forcedPullConflictChanges.length) {
+      remoteChanges = [
+        ...remoteChanges,
+        ...forcedPullConflictChanges,
+      ];
     }
   }
 
@@ -906,6 +910,13 @@ async function handlePull(paths, options) {
     remoteChanges = remoteChanges.filter((change) =>
       paths.some((p) => matchesPattern(change.path, p))
     );
+    forcedPullConflictChanges = forcedPullConflictChanges.filter((change) =>
+      paths.some((p) => matchesPattern(change.path, p))
+    );
+  }
+
+  if (forcedPullConflictChanges.length) {
+    console.log(`Force-pulling ${forcedPullConflictChanges.length} conflict(s) (remote wins)...`);
   }
 
   if (!remoteChanges.length && !options.force) {
@@ -946,6 +957,7 @@ async function handlePush(paths, options) {
       ChangeType.LOCAL_DELETED,
     ].includes(change.changeType)
   );
+  let forcedPushConflictChanges = [];
 
   if (options.force) {
     const remoteAdditions = diff.remoteChanges.filter(
@@ -959,12 +971,14 @@ async function handlePush(paths, options) {
       }),
     ];
 
-    const conflicts = diff.conflicts;
-    if (conflicts.length) {
-      console.log(`Force-pushing ${conflicts.length} conflict(s) (local wins)...`);
-      for (const c of conflicts) {
-        repo.stageConflictResolution(c, "ours");
-      }
+    forcedPushConflictChanges = diff.conflicts.map((conflict) =>
+      conflictResolutionChange(conflict, "ours")
+    );
+    if (forcedPushConflictChanges.length) {
+      localChanges = [
+        ...localChanges,
+        ...forcedPushConflictChanges,
+      ];
     }
   }
 
@@ -972,6 +986,13 @@ async function handlePush(paths, options) {
     localChanges = localChanges.filter((change) =>
       paths.some((p) => matchesPattern(change.path, p))
     );
+    forcedPushConflictChanges = forcedPushConflictChanges.filter((change) =>
+      paths.some((p) => matchesPattern(change.path, p))
+    );
+  }
+
+  if (forcedPushConflictChanges.length) {
+    console.log(`Force-pushing ${forcedPushConflictChanges.length} conflict(s) (local wins)...`);
   }
 
   if (!localChanges.length && !options.force) {
