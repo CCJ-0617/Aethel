@@ -431,10 +431,29 @@ function hasDescendantPath(paths, parentPath) {
   return paths.some((pathValue) => pathValue.startsWith(prefix));
 }
 
+function hasPathOrDescendant(paths, parentPath) {
+  return paths.includes(parentPath) || hasDescendantPath(paths, parentPath);
+}
+
 function isUnderAnyFolder(pathValue, folderPaths) {
   return [...folderPaths].some((folderPath) =>
     pathValue !== folderPath && pathValue.startsWith(`${folderPath}/`)
   );
+}
+
+function locallyDeletedAncestorPath(pathValue, snapshotLocalPaths, currentLocalPaths) {
+  const parts = String(pathValue || "").split("/").filter(Boolean);
+  for (let i = 1; i <= parts.length; i++) {
+    const candidate = parts.slice(0, i).join("/");
+    if (
+      hasPathOrDescendant(snapshotLocalPaths, candidate) &&
+      !hasPathOrDescendant(currentLocalPaths, candidate)
+    ) {
+      return candidate;
+    }
+  }
+
+  return null;
 }
 
 export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIgnore = true } = {}) {
@@ -491,6 +510,28 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
             snapshotMeta: samePathSnapshot.entry,
           })
         );
+        continue;
+      }
+
+      const localDeletePath = locallyDeletedAncestorPath(
+        remoteFile.path,
+        snapshotLocalPaths,
+        currentLocalPaths
+      );
+      if (localDeletePath) {
+        if (!locallyDeletedFolders.has(localDeletePath)) {
+          const remoteFolder = remoteByPath.get(localDeletePath);
+          locallyDeletedFolders.add(localDeletePath);
+          changes.push(
+            createChange({
+              changeType: ChangeType.LOCAL_DELETED,
+              path: localDeletePath,
+              fileId: remoteFolder?.id || null,
+              remoteMeta: remoteFolder || null,
+              snapshotMeta: snapshotLocalFiles[localDeletePath] || null,
+            })
+          );
+        }
         continue;
       }
 

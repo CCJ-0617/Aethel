@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { summarizeChanges } from "../src/core/change-summary.js";
+import { summarizeChanges, summarizeStagedEntries } from "../src/core/change-summary.js";
 
 function change(path, shortStatus = "ML", description = "modified locally") {
   return { path, shortStatus, description };
+}
+
+function staged(path, action = "delete_local") {
+  return { path, action };
 }
 
 test("summarizeChanges collapses multiple changes with the same parent folder", () => {
@@ -71,4 +75,57 @@ test("summarizeChanges detail mode returns every file-level change", () => {
 
   assert.deepEqual(entries.map((entry) => entry.path), ["docs/a.md", "docs/b.md"]);
   assert.deepEqual(entries.map((entry) => entry.kind), ["change", "change"]);
+});
+
+test("summarizeStagedEntries collapses large repeated directory deletions", () => {
+  const entries = summarizeStagedEntries([
+    staged("01_Courses/00_Compiler/IC_Lab/src/Lab01/Exercise/00_TESTBED"),
+    staged("01_Courses/00_Compiler/IC_Lab/src/Lab01/Exercise/01_RTL"),
+    staged("01_Courses/00_Compiler/IC_Lab/src/Lab01/Practice/00_TESTBED"),
+    staged("01_Courses/00_Compiler/IC_Lab/src/Lab02/Exercise/00_TESTBED"),
+    staged("01_Courses/00_Compiler/IC_Lab/src/Lab02/Exercise/01_RTL"),
+    staged("01_Courses/00_Compiler/IC_Lab/src/Lab03/Exercise/00_TESTBED"),
+    staged("01_Courses/00_Compiler/cbc-1.0/import/sys"),
+    staged("01_Courses/00_Compiler/overture/tools"),
+    staged("01_Courses/03_C/AP325/.gitignore", "upload"),
+  ]);
+
+  assert.deepEqual(
+    entries.map((entry) => ({
+      kind: entry.kind,
+      action: entry.action,
+      path: entry.path,
+      count: entry.count,
+      description: entry.description,
+    })),
+    [
+      {
+        kind: "group",
+        action: "delete_local",
+        path: "01_Courses/00_Compiler/",
+        count: 8,
+        description: "8 changes",
+      },
+      {
+        kind: "change",
+        action: "upload",
+        path: "01_Courses/03_C/AP325/.gitignore",
+        count: 1,
+        description: "upload",
+      },
+    ]
+  );
+});
+
+test("summarizeStagedEntries detail mode returns every staged entry", () => {
+  const entries = summarizeStagedEntries([
+    staged("01_Courses/00_Compiler/IC_Lab/src/Lab01/Exercise/00_TESTBED"),
+    staged("01_Courses/00_Compiler/IC_Lab/src/Lab01/Exercise/01_RTL"),
+  ], { detail: true });
+
+  assert.deepEqual(entries.map((entry) => entry.kind), ["change", "change"]);
+  assert.deepEqual(entries.map((entry) => entry.path), [
+    "01_Courses/00_Compiler/IC_Lab/src/Lab01/Exercise/00_TESTBED",
+    "01_Courses/00_Compiler/IC_Lab/src/Lab01/Exercise/01_RTL",
+  ]);
 });

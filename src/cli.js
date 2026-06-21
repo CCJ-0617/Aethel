@@ -34,7 +34,7 @@ import {
 import { createDefaultIgnoreFile, loadIgnoreRules } from "./core/ignore.js";
 import { createProgressBar, createSpinner } from "./core/progress.js";
 import { Repository } from "./core/repository.js";
-import { summarizeChanges } from "./core/change-summary.js";
+import { summarizeChanges, summarizeStagedEntries } from "./core/change-summary.js";
 import { conflictResolutionChange } from "./core/staging.js";
 import { remoteCacheEnabledByDefault } from "./core/sync-cache-policy.js";
 import { runTui } from "./tui/index.js";
@@ -240,7 +240,7 @@ function printChangeSummaryEntries(changes, options = {}) {
   }
 }
 
-function printStagedEntries(staged, { verbose = true } = {}) {
+function printStagedEntries(staged, { verbose = true, detail = false } = {}) {
   if (!staged.length) {
     console.log("No staged changes.");
     return;
@@ -249,8 +249,9 @@ function printStagedEntries(staged, { verbose = true } = {}) {
   if (verbose) {
     console.log(`\nStaged changes (${staged.length}):`);
   }
-  for (const entry of staged) {
-    console.log(`  ${entry.action.padStart(15, " ")}  ${entry.path}`);
+  for (const entry of summarizeStagedEntries(staged, { detail })) {
+    const countLabel = entry.count > 1 ? `  (${entry.description})` : "";
+    console.log(`  ${entry.action.padStart(15, " ")}  ${entry.path}${countLabel}`);
   }
 }
 
@@ -667,7 +668,7 @@ async function handleStatus(options) {
   }
 
   if (staged.length) {
-    printStagedEntries(staged);
+    printStagedEntries(staged, { detail: options.detail });
   }
 
   const stagedPaths = new Set(staged.map((e) => e.path));
@@ -723,7 +724,7 @@ async function handleDiff(options) {
   const staged = repo.getStagedEntries();
 
   if (options.staged || options.cached) {
-    printStagedEntries(staged);
+    printStagedEntries(staged, { detail: options.detail });
     return;
   }
 

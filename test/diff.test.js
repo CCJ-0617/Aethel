@@ -464,6 +464,75 @@ test("computeDiff collapses local deletion of non-empty remote folder to parent 
   );
 });
 
+test("computeDiff treats remote additions under a locally deleted snapshot folder as parent folder delete", () => {
+  const snapshot = {
+    files: {},
+    localFiles: {
+      "01_Courses/00_Compiler/IC_Lab/specs/lab1.pdf": {
+        localPath: "01_Courses/00_Compiler/IC_Lab/specs/lab1.pdf",
+        md5: "lab-md5",
+      },
+      "01_Courses/00_Compiler/cbc-1.0/import/sys": {
+        localPath: "01_Courses/00_Compiler/cbc-1.0/import/sys",
+        md5: "sys-md5",
+      },
+      "01_Courses/03_C/AP325/main.c": {
+        localPath: "01_Courses/03_C/AP325/main.c",
+        md5: "other-course-md5",
+      },
+    },
+  };
+
+  const remoteFiles = [
+    {
+      id: "compiler-folder",
+      path: "01_Courses/00_Compiler",
+      isFolder: true,
+    },
+    {
+      id: "specs-folder",
+      path: "01_Courses/00_Compiler/IC_Lab/specs",
+      isFolder: true,
+    },
+    {
+      id: "lab-file",
+      path: "01_Courses/00_Compiler/IC_Lab/specs/lab1.pdf",
+      md5Checksum: "lab-md5",
+    },
+    {
+      id: "sys-file",
+      path: "01_Courses/00_Compiler/cbc-1.0/import/sys",
+      md5Checksum: "sys-md5",
+    },
+  ];
+
+  const localFiles = {
+    "01_Courses/03_C/AP325/main.c": {
+      localPath: "01_Courses/03_C/AP325/main.c",
+      md5: "other-course-md5",
+    },
+  };
+
+  const diff = computeDiff(snapshot, remoteFiles, localFiles);
+
+  assert.deepEqual(
+    diff.changes.map((change) => ({
+      type: change.changeType,
+      path: change.path,
+      action: change.suggestedAction,
+      fileId: change.fileId,
+    })),
+    [
+      {
+        type: ChangeType.LOCAL_DELETED,
+        path: "01_Courses/00_Compiler",
+        action: "delete_remote",
+        fileId: "compiler-folder",
+      },
+    ]
+  );
+});
+
 test("computeDiff ignores files deleted on both local and Drive", () => {
   const snapshot = {
     files: {
