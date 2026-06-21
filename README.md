@@ -83,7 +83,9 @@ aethel pull --all -m "initial pull"     # hydrate local files from the current r
 ```bash
 aethel status                  # local vs remote changes at a glance
 aethel status --short          # compact Git-style status
+aethel status --detail         # show every file-level change
 aethel diff --side all         # detailed file-level diff
+aethel diff --side all --detail # include per-file metadata
 aethel diff --staged           # staged sync operations (--cached also works)
 aethel add -A                  # stage default suggested actions
 aethel restore --staged <path> # unstage like git restore --staged
@@ -339,6 +341,8 @@ src/
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed module structure and data flow.
+For a Traditional Chinese explanation of Aethel's sync model, see
+[docs/HOW_AETHEL_WORKS.zh-TW.md](docs/HOW_AETHEL_WORKS.zh-TW.md).
 
 ## Contributing
 

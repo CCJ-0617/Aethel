@@ -33,6 +33,7 @@ export const COMMAND_CATALOG = [
     actions: [
       { label: "Show Status", command: "status" },
       { label: "Short Status", command: "status --short" },
+      { label: "Detailed Status", command: "status --detail" },
     ],
   },
   {
@@ -41,6 +42,7 @@ export const COMMAND_CATALOG = [
     template: "diff --side all",
     actions: [
       { label: "All Changes", command: "diff --side all" },
+      { label: "Detailed Changes", command: "diff --side all --detail" },
       { label: "Staged Changes", command: "diff --staged" },
       { label: "Remote Only", command: "diff --side remote" },
       { label: "Local Only", command: "diff --side local" },

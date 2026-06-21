@@ -34,6 +34,7 @@ import {
 import { createDefaultIgnoreFile, loadIgnoreRules } from "./core/ignore.js";
 import { createProgressBar, createSpinner } from "./core/progress.js";
 import { Repository } from "./core/repository.js";
+import { summarizeChanges } from "./core/change-summary.js";
 import { conflictResolutionChange } from "./core/staging.js";
 import { remoteCacheEnabledByDefault } from "./core/sync-cache-policy.js";
 import { runTui } from "./tui/index.js";
@@ -226,6 +227,16 @@ function printChangeDetail(change) {
     const snapshotMd5 =
       change.snapshotMeta.md5Checksum || change.snapshotMeta.md5 || "?";
     console.log(`       snap:   md5=${String(snapshotMd5).slice(0, 8)}`);
+  }
+}
+
+function printChangeSummaryEntry(entry) {
+  console.log(`  ${entry.shortStatus} ${entry.path}  (${entry.description})`);
+}
+
+function printChangeSummaryEntries(changes, options = {}) {
+  for (const entry of summarizeChanges(changes, options)) {
+    printChangeSummaryEntry(entry);
   }
 }
 
@@ -644,8 +655,10 @@ async function handleStatus(options) {
       console.log(`S  ${entry.action}  ${entry.path}`);
     }
     const stagedPaths = new Set(staged.map((e) => e.path));
-    for (const change of diff.changes.filter((c) => !stagedPaths.has(c.path))) {
-      console.log(`${change.shortStatus.padEnd(2, " ")} ${change.path}`);
+    const unstaged = diff.changes.filter((c) => !stagedPaths.has(c.path));
+    for (const entry of summarizeChanges(unstaged, { detail: options.detail })) {
+      const countLabel = entry.count > 1 ? ` (${entry.count} changes)` : "";
+      console.log(`${entry.shortStatus.padEnd(2, " ")} ${entry.path}${countLabel}`);
     }
     for (const change of [...(diff.pendingPackChanges || []), ...(diff.packConflicts || [])]) {
       console.log(`${change.shortStatus.padEnd(2, " ")} ${change.path}`);
@@ -664,23 +677,17 @@ async function handleStatus(options) {
 
   if (unstagedRemote.length) {
     console.log(`\nRemote changes (${unstagedRemote.length}):`);
-    for (const change of unstagedRemote) {
-      console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
-    }
+    printChangeSummaryEntries(unstagedRemote, { detail: options.detail });
   }
 
   if (unstagedLocal.length) {
     console.log(`\nLocal changes (${unstagedLocal.length}):`);
-    for (const change of unstagedLocal) {
-      console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
-    }
+    printChangeSummaryEntries(unstagedLocal, { detail: options.detail });
   }
 
   if (unstagedConflicts.length) {
     console.log(`\nConflicts (${unstagedConflicts.length}):`);
-    for (const change of unstagedConflicts) {
-      console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
-    }
+    printChangeSummaryEntries(unstagedConflicts, { detail: options.detail });
   }
 
   // Display pack changes
@@ -730,22 +737,34 @@ async function handleDiff(options) {
 
   if (showRemote && diff.remoteChanges.length) {
     console.log("Remote changes:");
-    for (const change of diff.remoteChanges) {
-      printChangeDetail(change);
+    if (options.detail) {
+      for (const change of diff.remoteChanges) {
+        printChangeDetail(change);
+      }
+    } else {
+      printChangeSummaryEntries(diff.remoteChanges);
     }
   }
 
   if (showLocal && diff.localChanges.length) {
     console.log("Local changes:");
-    for (const change of diff.localChanges) {
-      printChangeDetail(change);
+    if (options.detail) {
+      for (const change of diff.localChanges) {
+        printChangeDetail(change);
+      }
+    } else {
+      printChangeSummaryEntries(diff.localChanges);
     }
   }
 
   if (diff.conflicts.length) {
     console.log("Conflicts:");
-    for (const change of diff.conflicts) {
-      printChangeDetail(change);
+    if (options.detail) {
+      for (const change of diff.conflicts) {
+        printChangeDetail(change);
+      }
+    } else {
+      printChangeSummaryEntries(diff.conflicts);
     }
   }
 }
@@ -1758,6 +1777,7 @@ async function main() {
     program.command("status").description("Show sync status")
       .option("-v, --verbose", "Show all pack states including synced")
       .option("-s, --short", "Give the output in short format")
+      .option("--detail", "Show every file-level change instead of folder summaries")
   ).action(handleStatus);
 
   addAuthOptions(
@@ -1767,6 +1787,7 @@ async function main() {
       .option("--side <side>", "Which side to show: remote, local, or all", "all")
       .option("--staged", "Show staged sync operations")
       .option("--cached", "Alias for --staged")
+      .option("--detail", "Show every file-level change with metadata")
   ).action(handleDiff);
 
   addAuthOptions(

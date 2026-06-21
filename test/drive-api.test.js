@@ -548,6 +548,38 @@ test("getRemoteState reuses Drive memo and applies incremental changes", async (
   );
 });
 
+test("getRemoteState can refresh Drive memo from an authoritative listing", async () => {
+  const drive = createFakeDrive([
+    folder("project", "Project", "real-my-drive-root", "2026-04-04T10:00:00.000Z"),
+    file("inside", "inside.txt", "project", "2026-04-04T10:02:00.000Z", "inside"),
+  ]);
+  const options = { estimatedRemoteFiles: 50_000 };
+
+  const firstState = await getRemoteState(drive, "project", null, options);
+  assert.deepEqual(firstState.files.map((item) => item.path), ["inside.txt"]);
+
+  await drive.files.update({
+    fileId: "inside",
+    requestBody: { trashed: true },
+  });
+
+  drive.clearListQueries();
+  const refreshedState = await getRemoteState(drive, "project", null, {
+    ...options,
+    refreshRemoteMemo: true,
+  });
+
+  assert.deepEqual(refreshedState.files, []);
+  assert.equal(
+    drive.listQueries().some((query) => query === "trashed = false"),
+    true
+  );
+  assert.equal(
+    drive.snapshot().filter((item) => item.name.startsWith(".aethel-remote-memo-")).length,
+    1
+  );
+});
+
 test("executeStaged does not create duplicate folders during concurrent uploads", async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
 

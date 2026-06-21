@@ -129,11 +129,14 @@ function escapeDriveQueryValue(value) {
     .replace(/"/g, '\\"');
 }
 
-function remoteMemoEnabled(rootFolderId, { estimatedRemoteFiles = null, fetchMode = null } = {}) {
+function remoteMemoEnabled(
+  rootFolderId,
+  { estimatedRemoteFiles = null, remoteMemoMode = null } = {}
+) {
   if (!rootFolderId) {
     return false;
   }
-  const mode = String(fetchMode || process.env.AETHEL_REMOTE_MEMO || "auto").toLowerCase();
+  const mode = String(remoteMemoMode || process.env.AETHEL_REMOTE_MEMO || "auto").toLowerCase();
   if (["0", "false", "off"].includes(mode)) {
     return false;
   }
@@ -484,6 +487,17 @@ async function writeRemoteMemo(
   if (existingFileId) {
     await drive.files.update({
       fileId: existingFileId,
+      requestBody: { name: remoteMemoName(rootFolderId) },
+      media,
+      fields: "id",
+    });
+    return;
+  }
+
+  const existingMemo = await findRemoteMemoFile(drive, rootFolderId);
+  if (existingMemo?.id) {
+    await drive.files.update({
+      fileId: existingMemo.id,
       requestBody: { name: remoteMemoName(rootFolderId) },
       media,
       fields: "id",
@@ -989,7 +1003,9 @@ export async function getRemoteState(drive, rootFolderId = null, ignoreRules = n
   let memoStartPageToken = null;
   let memoFileId = null;
 
-  const memoResult = await fetchMemoizedRemoteItems(drive, rootFolderId, options);
+  const memoResult = options.refreshRemoteMemo
+    ? null
+    : await fetchMemoizedRemoteItems(drive, rootFolderId, options);
   if (memoResult) {
     rawItems = memoResult.rawItems;
     memoStartPageToken = memoResult.startPageToken;

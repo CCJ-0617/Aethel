@@ -392,6 +392,82 @@ test("computeDiff keeps local deletion semantics for files that were synced loca
   assert.equal(diff.changes[0].suggestedAction, "delete_remote");
 });
 
+test("computeDiff ignores files deleted on both local and Drive", () => {
+  const snapshot = {
+    files: {
+      "synced-remote": {
+        id: "synced-remote",
+        path: "docs/deleted.md",
+        localPath: "docs/deleted.md",
+        md5Checksum: "same-md5",
+      },
+    },
+    localFiles: {
+      "docs/deleted.md": {
+        localPath: "docs/deleted.md",
+        md5: "same-md5",
+      },
+    },
+  };
+
+  const diff = computeDiff(snapshot, [], {});
+
+  assert.deepEqual(diff.changes, []);
+});
+
+test("computeDiff ignores folders deleted on both local and Drive", () => {
+  const snapshot = {
+    files: {
+      "folder-remote": {
+        id: "folder-remote",
+        path: "docs/archive",
+        localPath: "docs/archive",
+        isFolder: true,
+      },
+    },
+    localFiles: {
+      "docs/archive": {
+        localPath: "docs/archive",
+        isFolder: true,
+      },
+    },
+  };
+
+  const diff = computeDiff(snapshot, [], {});
+
+  assert.deepEqual(diff.changes, []);
+});
+
+test("computeDiff lets remote-deleted folders delete matching local folders without local baseline", () => {
+  const snapshot = {
+    files: {
+      "folder-remote": {
+        id: "folder-remote",
+        path: "docs/generated",
+        localPath: "docs/generated",
+        isFolder: true,
+      },
+    },
+    localFiles: {},
+  };
+
+  const localFiles = {
+    "docs/generated": {
+      localPath: "docs/generated",
+      isFolder: true,
+    },
+  };
+
+  const diff = computeDiff(snapshot, [], localFiles);
+
+  assert.deepEqual(
+    diff.changes.map((change) => change.changeType),
+    [ChangeType.REMOTE_DELETED]
+  );
+  assert.equal(diff.changes[0].path, "docs/generated");
+  assert.equal(diff.changes[0].suggestedAction, "delete_local");
+});
+
 test("computeDiff ignores historical snapshot entries that now match .aethelignore", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aethel-diff-"));
 

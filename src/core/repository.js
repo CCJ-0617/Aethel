@@ -246,8 +246,11 @@ export class Repository {
 
     if (needRemote) invalidateRemoteCache(this._root);
 
+    const remoteFetchOptions = needRemote
+      ? { ...this._remoteFetchOptions(), refreshRemoteMemo: true }
+      : null;
     const [remoteState, localFiles] = await Promise.all([
-      needRemote ? getRemoteState(this.drive, rootFolderId, null, this._remoteFetchOptions()) : remote,
+      needRemote ? getRemoteState(this.drive, rootFolderId, null, remoteFetchOptions) : remote,
       needLocal ? scanLocal(this._root) : local,
     ]);
 

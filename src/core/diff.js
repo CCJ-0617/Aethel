@@ -491,6 +491,31 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
       continue;
     }
 
+    const snapshotPath = snapshotEntry.path || snapshotEntry.localPath || "";
+    if (snapshotPath && snapshotPath !== remoteFile.path) {
+      changes.push(
+        createChange({
+          changeType: ChangeType.REMOTE_DELETED,
+          path: snapshotPath,
+          fileId: remoteFile.id,
+          snapshotMeta: snapshotEntry,
+        })
+      );
+
+      if (!(remoteFile.isFolder && localFolderPaths.has(remoteFile.path))) {
+        changes.push(
+          createChange({
+            changeType: ChangeType.REMOTE_ADDED,
+            path: remoteFile.path,
+            fileId: remoteFile.id,
+            remoteMeta: remoteFile,
+            snapshotMeta: snapshotEntry,
+          })
+        );
+      }
+      continue;
+    }
+
     if (remoteChanged(snapshotEntry, remoteFile)) {
       changes.push(
         createChange({
@@ -554,6 +579,7 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   }
 
   // Detect remote deletions — snapshot entries missing from remote
+  const remoteDeletedFoldersByPath = new Set();
   for (const fileId of Object.keys(snapshotFiles)) {
     if (!remoteById.has(fileId)) {
       const snapshotEntry = snapshotFiles[fileId];
@@ -570,6 +596,23 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
       if (snapshotEntry.isFolder && remoteFolderPaths.has(snapshotPath)) {
         continue;
       }
+
+      const hadLocalBaseline = Object.prototype.hasOwnProperty.call(
+        snapshotLocalFiles,
+        snapshotPath
+      );
+      const missingLocally = !Object.prototype.hasOwnProperty.call(
+        localFilesData,
+        snapshotPath
+      );
+      if (hadLocalBaseline && missingLocally) {
+        continue;
+      }
+
+      if (snapshotEntry.isFolder && snapshotPath) {
+        remoteDeletedFoldersByPath.add(snapshotPath);
+      }
+
       changes.push(
         createChange({
           changeType: ChangeType.REMOTE_DELETED,
@@ -589,6 +632,10 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
     const snapshotEntry = snapshotLocalFiles[relativePath];
 
     if (!snapshotEntry) {
+      if (localMeta.isFolder && remoteDeletedFoldersByPath.has(relativePath)) {
+        continue;
+      }
+
       // Skip local folder if it already exists on Drive (as parent or explicit dir)
       if (localMeta.isFolder && remoteFolderPaths.has(relativePath)) {
         continue;
@@ -624,6 +671,14 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
         continue;
       }
       const remoteEntry = snapshotRemoteByPath.get(relativePath);
+      const remoteAlsoDeleted =
+        remoteEntry &&
+        !remoteById.has(remoteEntry.fileId) &&
+        !remoteByPath.has(relativePath) &&
+        !(snapshotEntry.isFolder && remoteFolderPaths.has(relativePath));
+      if (remoteAlsoDeleted) {
+        continue;
+      }
       changes.push(
         createChange({
           changeType: ChangeType.LOCAL_DELETED,
