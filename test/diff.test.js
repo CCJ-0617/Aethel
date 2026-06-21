@@ -392,6 +392,78 @@ test("computeDiff keeps local deletion semantics for files that were synced loca
   assert.equal(diff.changes[0].suggestedAction, "delete_remote");
 });
 
+test("computeDiff collapses local deletion of non-empty remote folder to parent folder delete", () => {
+  const snapshot = {
+    files: {
+      "remote-folder": {
+        id: "remote-folder",
+        path: "build/app.dSYM",
+        localPath: "build/app.dSYM",
+        isFolder: true,
+      },
+      "remote-info": {
+        id: "remote-info",
+        path: "build/app.dSYM/Contents/Info.plist",
+        localPath: "build/app.dSYM/Contents/Info.plist",
+        md5Checksum: "info-md5",
+      },
+      "remote-binary": {
+        id: "remote-binary",
+        path: "build/app.dSYM/Contents/Resources/DWARF/app",
+        localPath: "build/app.dSYM/Contents/Resources/DWARF/app",
+        md5Checksum: "binary-md5",
+      },
+    },
+    localFiles: {
+      "build/app.dSYM/Contents/Info.plist": {
+        localPath: "build/app.dSYM/Contents/Info.plist",
+        md5: "info-md5",
+      },
+      "build/app.dSYM/Contents/Resources/DWARF/app": {
+        localPath: "build/app.dSYM/Contents/Resources/DWARF/app",
+        md5: "binary-md5",
+      },
+    },
+  };
+
+  const remoteFiles = [
+    {
+      id: "remote-folder",
+      path: "build/app.dSYM",
+      isFolder: true,
+    },
+    {
+      id: "remote-info",
+      path: "build/app.dSYM/Contents/Info.plist",
+      md5Checksum: "info-md5",
+    },
+    {
+      id: "remote-binary",
+      path: "build/app.dSYM/Contents/Resources/DWARF/app",
+      md5Checksum: "binary-md5",
+    },
+  ];
+
+  const diff = computeDiff(snapshot, remoteFiles, {});
+
+  assert.deepEqual(
+    diff.changes.map((change) => ({
+      type: change.changeType,
+      path: change.path,
+      action: change.suggestedAction,
+      fileId: change.fileId,
+    })),
+    [
+      {
+        type: ChangeType.LOCAL_DELETED,
+        path: "build/app.dSYM",
+        action: "delete_remote",
+        fileId: "remote-folder",
+      },
+    ]
+  );
+});
+
 test("computeDiff ignores files deleted on both local and Drive", () => {
   const snapshot = {
     files: {

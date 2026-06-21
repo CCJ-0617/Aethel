@@ -422,6 +422,21 @@ function remoteAndLocalEquivalent(remoteFile, localMeta) {
   return false;
 }
 
+function hasDescendantPath(paths, parentPath) {
+  if (!parentPath) {
+    return false;
+  }
+
+  const prefix = `${parentPath}/`;
+  return paths.some((pathValue) => pathValue.startsWith(prefix));
+}
+
+function isUnderAnyFolder(pathValue, folderPaths) {
+  return [...folderPaths].some((folderPath) =>
+    pathValue !== folderPath && pathValue.startsWith(`${folderPath}/`)
+  );
+}
+
 export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIgnore = true } = {}) {
   const ignoreRules = root && respectIgnore ? loadIgnoreRules(root) : null;
 
@@ -439,6 +454,9 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   const snapshotLocalFiles = filterLocalFilesByIgnore(snapshot?.localFiles, ignoreRules);
   const snapshotRemoteByPath = indexSnapshotFilesByPath(snapshotFiles);
   const remoteByPath = indexRemoteFilesByPath(remoteFiles);
+  const snapshotLocalPaths = Object.keys(snapshotLocalFiles);
+  const currentLocalPaths = Object.keys(localFilesData);
+  const locallyDeletedFolders = new Set();
 
   // Build sets of all folder paths that implicitly exist on each side
   // (from parent directories of files), so we can skip redundant folder additions.
@@ -543,6 +561,24 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
     }
 
     if (missingLocally) {
+      if (
+        remoteFile.isFolder &&
+        hasDescendantPath(snapshotLocalPaths, remoteFile.path) &&
+        !hasDescendantPath(currentLocalPaths, remoteFile.path)
+      ) {
+        locallyDeletedFolders.add(remoteFile.path);
+        changes.push(
+          createChange({
+            changeType: ChangeType.LOCAL_DELETED,
+            path: remoteFile.path,
+            fileId: remoteFile.id,
+            remoteMeta: remoteFile,
+            snapshotMeta: snapshotEntry,
+          })
+        );
+        continue;
+      }
+
       // The remote entry was snapshotted without a matching local entry.
       // Treat it as pending download so a partial local tree can self-heal.
       if (remoteFile.isFolder && localFolderPaths.has(remoteFile.path)) {
@@ -666,6 +702,10 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
 
   for (const [relativePath, snapshotEntry] of Object.entries(snapshotLocalFiles)) {
     if (!(relativePath in localFilesData)) {
+      if (isUnderAnyFolder(relativePath, locallyDeletedFolders)) {
+        continue;
+      }
+
       // Skip folder deletion if the folder still implicitly exists locally
       if (snapshotEntry.isFolder && localFolderPaths.has(relativePath)) {
         continue;

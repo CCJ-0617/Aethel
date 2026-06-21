@@ -76,50 +76,140 @@ aethel pull --all -m "initial pull"     # hydrate local files from the current r
 
 > `credentials.json` and `token.json` are local secrets — never commit them.
 
-## Usage
+## Daily Workflow
 
 ![Aethel usage flow](docs/usage.gif)
+
+Aethel is not a background mirror. It uses a Git-like flow:
+
+```text
+snapshot -> status/diff -> add/resolve -> commit
+```
+
+`status`, `add`, `pull`, and `push` compare three states: the latest Aethel
+snapshot, Google Drive, and your local files. A successful `commit`, `pull`, or
+`push` saves a new snapshot so the next sync has a clear baseline.
+
+### Review Changes
 
 ```bash
 aethel status                  # local vs remote changes at a glance
 aethel status --short          # compact Git-style status
 aethel status --detail         # show every file-level change
-aethel diff --side all         # detailed file-level diff
-aethel diff --side all --detail # include per-file metadata
-aethel diff --staged           # staged sync operations (--cached also works)
+aethel diff --side all         # show local and remote changes
+aethel diff --side all --detail # include hashes and modified times
+```
+
+By default, `status` groups many file-level changes under the nearest changed
+parent folder. Use `--detail` when you need to inspect every changed file.
+
+### Sync Both Ways Manually
+
+```bash
 aethel add -A                  # stage default suggested actions
+aethel diff --staged           # review what will be applied
 aethel restore --staged <path> # unstage like git restore --staged
 aethel commit -m "sync"        # execute staged operations
+```
 
+This is the safest workflow when both Drive and local files may have changed.
+
+### Pull From Drive
+
+```bash
+aethel fetch                   # refresh and preview remote changes
+aethel pull -m "pull"          # apply remote changes since the last snapshot
+aethel pull --all              # download the full remote tree
+aethel pull path/to/folder     # pull only matching paths
+```
+
+Use `pull --all` for a first full download or when you intentionally want to
+rehydrate local files from the current Drive tree.
+
+### Push To Drive
+
+```bash
+aethel push -m "push"          # apply local changes to Drive
+aethel push path/to/folder     # push only matching paths
+aethel push --dry-run          # preview local changes before upload/delete
+aethel push --force            # make local state authoritative
+```
+
+`push --force` accepts local versions for conflicts and treats Drive-only files
+as remote deletions when they do not exist locally. Use `--dry-run` first when
+you are cleaning up a large remote tree.
+
+### Resolve Conflicts
+
+When both sides change the same path, Aethel stops and asks you to choose:
+
+```bash
+aethel status
+aethel resolve --keep local path/to/file    # upload local version
+aethel resolve --keep remote path/to/file   # download Drive version
+aethel resolve --keep both path/to/file     # keep both copies
+aethel commit -m "resolve conflict"
+```
+
+Git-style aliases also work:
+
+```bash
+aethel resolve --ours path/to/file     # same as --keep local
+aethel resolve --theirs path/to/file   # same as --keep remote
+aethel resolve --both path/to/file     # same as --keep both
+```
+
+### Inspect History And Remote
+
+```bash
 aethel remote -v               # show the Drive remote as origin
-aethel fetch                   # refresh remote state without applying
-aethel pull -m "pull"          # fetch remote changes and apply
-aethel pull --all              # download the full remote tree to local
-aethel push -m "push"          # push local changes to Drive
-aethel clean --ignored         # dry-run cleanup for Drive files matching .aethelignore
 aethel log --oneline           # compact sync history
 aethel show --stat HEAD        # snapshot summary
 aethel rev-parse --short HEAD  # resolve snapshot refs
+```
+
+### Branches And Tags
+
+Branches and tags are lightweight names for Aethel snapshots. Switching a branch
+changes the active snapshot ref; it does not rewrite your working files by
+itself.
+
+```bash
 aethel branch -v               # show branch refs and Drive target
 aethel switch -c experiment    # create and switch branch refs
 aethel checkout experiment     # switch to a branch when the name exists
 aethel tag v1 HEAD             # name a snapshot for later inspection
-aethel verify                  # verify local files against the last snapshot
+aethel restore --source v1 path/to/file
 ```
 
-`pull` applies remote changes relative to the latest snapshot. Use `pull --all` for the first full download or to rehydrate a local workspace from the current remote tree.
+## Maintenance Commands
 
-### Conflict Resolution
-
-When both local and remote change the same path:
+### Verify Integrity
 
 ```bash
-aethel status                  # identify conflicts
-aethel resolve <path> --keep local   # or: remote, both
-aethel commit -m "resolve"
+aethel verify          # check snapshot checksum and local file hashes
+aethel verify --remote # also compare Drive file hashes
 ```
 
-### Deduplication
+`verify` compares the latest snapshot with the workspace on disk and exits
+non-zero when files are missing or modified. Add `--remote` when you also want
+to verify Drive state before a migration or restore.
+
+### Clean Ignored Files On Drive
+
+Ignored local files are skipped by normal sync scans. If ignored build artifacts
+or cache files already exist on Drive, clean them explicitly:
+
+```bash
+aethel clean --ignored
+aethel clean --ignored --execute --confirm "DELETE IGNORED GOOGLE DRIVE FILES"
+```
+
+The command dry-runs by default and reports the topmost ignored Drive
+files/folders it would move to trash. Add `--permanent` only when you really
+want Drive items deleted instead of trashed.
+
+### Deduplicate Drive
 
 Multi-device conflicts can leave duplicate folders on Drive:
 
@@ -132,37 +222,27 @@ Processes deepest-first for single-pass convergence, caches child state to minim
 
 ## Commands
 
-| Command            | Description                                                         |
-| ------------------ | ------------------------------------------------------------------- |
-| `auth`           | OAuth flow — creates `token.json`, verifies Drive access         |
-| `clone`          | Create a workspace from a Drive folder and pull its contents        |
-| `init`           | Initialize a local sync workspace                                   |
-| `status`         | Show local vs remote changes (`-s` / `--short` supported)           |
-| `diff`           | Detailed file differences (`--staged` / `--cached` supported)       |
-| `add`            | Stage changes (`-A`, `-a`, and `--all` supported)                   |
-| `reset`          | Unstage changes (`reset HEAD <path>` accepted)                      |
-| `commit`         | Execute staged sync operations                                      |
-| `branch`         | List, create, or delete branch refs (`branch -v`)                   |
-| `switch`         | Switch the current branch ref (`switch -c name`)                    |
-| `tag`            | Create, list, or delete snapshot tags                               |
-| `remote`         | Inspect the Drive remote (`remote -v`, `remote show origin`)        |
-| `pull`           | Fetch and apply remote changes (`--all` for full remote download) |
-| `push`           | Push local changes to Drive (`--force` makes local state authoritative) |
-| `log`            | Sync history                                                        |
-| `fetch`          | Refresh remote state without applying                               |
-| `resolve`        | Resolve conflicts (local / remote / both)                           |
-| `ignore`         | Manage `.aethelignore` patterns                                   |
-| `show`           | Inspect a saved snapshot (`--stat`, `--oneline`)                    |
-| `rev-parse`      | Resolve `HEAD`, branch, tag, or timestamp refs                      |
-| `restore`        | Restore files from a snapshot ref (`--source`, `--staged`)          |
-| `checkout`       | Switch branch refs or restore paths from `HEAD`                     |
-| `rm`             | Remove local files and stage remote deletion                        |
-| `mv`             | Move or rename local files                                          |
-| `verify`         | Verify local and optional remote integrity against the last snapshot |
-| `clean`          | List and optionally trash/delete Drive files (`--ignored` for .aethelignore cleanup) |
-| `dedupe-folders` | Detect and merge duplicate remote folders                           |
-| `dedupe-files`   | Detect and remove duplicate remote files                            |
-| `tui`            | Launch interactive terminal UI                                      |
+| Command | What it is for |
+| --- | --- |
+| `auth` | Sign in to Google Drive |
+| `clone` | Create a workspace from a Drive folder and download its contents |
+| `init` | Connect an existing local directory to My Drive or a Drive folder |
+| `status` | Show remote, local, staged, and conflicted changes |
+| `diff` | Inspect unstaged or staged changes |
+| `add` | Stage suggested sync actions |
+| `reset` / `restore --staged` | Unstage changes |
+| `commit` | Execute staged sync actions and save a snapshot |
+| `fetch` | Refresh remote state without applying it |
+| `pull` | Apply Drive changes locally |
+| `push` | Apply local changes to Drive |
+| `resolve` | Choose local, remote, or both for conflicts |
+| `log` / `show` / `rev-parse` | Inspect saved snapshots |
+| `branch` / `switch` / `checkout` / `tag` | Name and switch snapshot refs |
+| `rm` / `mv` | Git-like local remove and rename helpers |
+| `ignore` / `clean --ignored` | Manage ignored paths and remove ignored files from Drive |
+| `verify` | Check local and optional remote integrity |
+| `dedupe-folders` / `dedupe-files` | Clean up duplicate Drive entries |
+| `tui` | Open the interactive terminal UI |
 
 ### Git-Compatible Command Forms
 
@@ -198,20 +278,6 @@ intentionally close to Git:
 
 Existing long Aethel forms such as `add --all` and `reset --all` remain
 supported.
-
-Aethel branches and tags are lightweight refs over snapshots. Switching branch
-refs does not rewrite working files by itself; it changes the current branch
-pointer used for later snapshots. Use `restore --source <branch-or-tag>`,
-`pull`, or explicit sync commands when you want files to move.
-
-### Integrity Verification
-
-```bash
-aethel verify          # check snapshot checksum and local file hashes
-aethel verify --remote # also compare Drive file hashes
-```
-
-`verify` compares the latest snapshot with the workspace on disk and exits non-zero when files are missing or modified. Add `--remote` when you also want to verify Drive state before a release, migration, or restore.
 
 ## TUI
 
@@ -289,18 +355,8 @@ dist/
 build/
 ```
 
-Ignored paths are skipped by normal sync scans. If ignored build artifacts or
-cache files already exist on Drive, use `clean --ignored` to remove them from
-the configured Drive sync root:
-
-```bash
-aethel clean --ignored
-aethel clean --ignored --execute --confirm "DELETE IGNORED GOOGLE DRIVE FILES"
-```
-
-The command dry-runs by default and reports the topmost ignored Drive
-files/folders it would move to trash. Add `--permanent` only when you really
-want Drive items deleted instead of trashed.
+Ignored paths are skipped by normal sync scans. Use `aethel ignore list` to
+see active patterns and `aethel ignore test <path>` to check one path.
 
 ## Environment Variables
 
@@ -311,36 +367,14 @@ want Drive items deleted instead of trashed.
 | `AETHEL_DRIVE_CONCURRENCY`      | `40`                                | Max concurrent Drive API requests                |
 | `AETHEL_TRANSFER_CONCURRENCY`   | `20`                                | Max concurrent upload/download/delete operations |
 
-## Architecture
+## How It Works
 
-Aethel uses a **Repository pattern** — a single `Repository` class (`src/core/repository.js`) wraps all core modules and serves as the unified data-access layer for both the CLI and the TUI.
+Aethel keeps its workspace state in `.aethel/` and records the latest successful
+sync as a snapshot. Each status or sync command compares that snapshot with the
+current Drive tree and the current local tree, so it can tell the difference
+between remote changes, local changes, deletions, and true conflicts.
 
-```
-src/
-├── cli.js                    CLI entry — all handlers use Repository
-├── core/
-│   ├── repository.js         Unified data-access layer
-│   ├── auth.js               OAuth authentication
-│   ├── config.js             Workspace config & state persistence
-│   ├── diff.js               Change detection between states
-│   ├── drive-api.js          Google Drive API wrapper
-│   ├── local-fs.js           Local filesystem operations
-│   ├── remote-cache.js       Short-lived remote file cache
-│   ├── snapshot.js           Local scanning & snapshot creation
-│   ├── staging.js            Stage/unstage operations
-│   ├── sync.js               Execute staged changes
-│   ├── ignore.js             .aethelignore pattern matching
-│   ├── compress.js           Multi-algorithm compression (gzip, brotli, zstd, xz)
-│   ├── pack.js               Tar archive operations & tree hash
-│   └── pack-manifest.js      Pack manifest CRUD operations
-└── tui/
-    ├── app.js                React (Ink) dual-pane component
-    ├── index.js              TUI entry
-    ├── commands.js           CLI command parser for TUI
-    └── command-catalog.js    Available TUI commands
-```
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed module structure and data flow.
+For implementation details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Contributing
 
