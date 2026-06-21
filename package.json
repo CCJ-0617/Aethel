@@ -37,7 +37,6 @@
     "README.md",
     "CHANGELOG.md",
     "docs/ARCHITECTURE.md",
-    "docs/HOW_AETHEL_WORKS.zh-TW.md",
     ".env.example"
   ],
   "scripts": {

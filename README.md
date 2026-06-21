@@ -341,8 +341,6 @@ src/
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed module structure and data flow.
-For a Traditional Chinese explanation of Aethel's sync model, see
-[docs/HOW_AETHEL_WORKS.zh-TW.md](docs/HOW_AETHEL_WORKS.zh-TW.md).
 
 ## Contributing
 
