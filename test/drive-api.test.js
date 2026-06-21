@@ -933,6 +933,41 @@ test("executeStaged deletes an empty local directory even when folder metadata i
   }
 });
 
+test("executeStaged cleans empty parent folders after file-only local deletions", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    await fs.mkdir(path.join(workspaceRoot, "docs", "nested"), { recursive: true });
+    await fs.writeFile(path.join(workspaceRoot, "docs", "a.txt"), "a");
+    await fs.writeFile(path.join(workspaceRoot, "docs", "nested", "b.txt"), "b");
+
+    writeIndex(workspaceRoot, {
+      staged: [
+        {
+          action: "delete_local",
+          path: "docs/a.txt",
+          localPath: "docs/a.txt",
+        },
+        {
+          action: "delete_local",
+          path: "docs/nested/b.txt",
+          localPath: "docs/nested/b.txt",
+        },
+      ],
+    });
+
+    const result = await executeStaged({ files: {} }, workspaceRoot);
+
+    assert.equal(result.deletedLocal, 2);
+    assert.deepEqual(result.errors, []);
+    await assert.rejects(fs.stat(path.join(workspaceRoot, "docs")), { code: "ENOENT" });
+    assert.equal(readIndex(workspaceRoot).staged.length, 0);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("downloadFile rejects unsupported Google Workspace files before media download", async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-download-"));
 

@@ -456,6 +456,31 @@ function locallyDeletedAncestorPath(pathValue, snapshotLocalPaths, currentLocalP
   return null;
 }
 
+function remotelyDeletedAncestorPath(pathValue, snapshotRemotePaths, currentRemotePaths, localFolderPaths) {
+  const parts = String(pathValue || "").split("/").filter(Boolean);
+  for (let i = 1; i < parts.length; i++) {
+    const candidate = parts.slice(0, i).join("/");
+    if (
+      localFolderPaths.has(candidate) &&
+      hasPathOrDescendant(snapshotRemotePaths, candidate) &&
+      !hasPathOrDescendant(currentRemotePaths, candidate)
+    ) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function folderSnapshotMeta(pathValue, snapshotRemoteByPath) {
+  return {
+    ...(snapshotRemoteByPath.get(pathValue)?.entry || {}),
+    path: pathValue,
+    localPath: pathValue,
+    isFolder: true,
+  };
+}
+
 export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIgnore = true } = {}) {
   const ignoreRules = root && respectIgnore ? loadIgnoreRules(root) : null;
 
@@ -475,6 +500,8 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   const remoteByPath = indexRemoteFilesByPath(remoteFiles);
   const snapshotLocalPaths = Object.keys(snapshotLocalFiles);
   const currentLocalPaths = Object.keys(localFilesData);
+  const snapshotRemotePaths = Object.values(snapshotFiles).map((entry) => entryPath(entry)).filter(Boolean);
+  const currentRemotePaths = remoteFiles.map((file) => file.path).filter(Boolean);
   const locallyDeletedFolders = new Set();
 
   // Build sets of all folder paths that implicitly exist on each side
@@ -662,6 +689,10 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
       const snapshotEntry = snapshotFiles[fileId];
       const snapshotPath = snapshotEntry.path || snapshotEntry.localPath || "";
 
+      if (remoteDeletedFoldersByPath.has(snapshotPath) || isUnderAnyFolder(snapshotPath, remoteDeletedFoldersByPath)) {
+        continue;
+      }
+
       // Same path with a different Drive ID is a remote replacement, not a
       // deletion of the local path.
       if (snapshotPath && remoteByPath.has(snapshotPath)) {
@@ -683,6 +714,28 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
         snapshotPath
       );
       if (hadLocalBaseline && missingLocally) {
+        continue;
+      }
+
+      const remoteDeletePath = snapshotEntry.isFolder
+        ? null
+        : remotelyDeletedAncestorPath(
+          snapshotPath,
+          snapshotRemotePaths,
+          currentRemotePaths,
+          localFolderPaths
+        );
+      if (remoteDeletePath) {
+        remoteDeletedFoldersByPath.add(remoteDeletePath);
+        const remoteFolder = snapshotRemoteByPath.get(remoteDeletePath);
+        changes.push(
+          createChange({
+            changeType: ChangeType.REMOTE_DELETED,
+            path: remoteDeletePath,
+            fileId: remoteFolder?.fileId || null,
+            snapshotMeta: folderSnapshotMeta(remoteDeletePath, snapshotRemoteByPath),
+          })
+        );
         continue;
       }
 
@@ -709,7 +762,11 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
     const snapshotEntry = snapshotLocalFiles[relativePath];
 
     if (!snapshotEntry) {
-      if (localMeta.isFolder && remoteDeletedFoldersByPath.has(relativePath)) {
+      if (
+        localMeta.isFolder &&
+        (remoteDeletedFoldersByPath.has(relativePath) ||
+          isUnderAnyFolder(relativePath, remoteDeletedFoldersByPath))
+      ) {
         continue;
       }
 

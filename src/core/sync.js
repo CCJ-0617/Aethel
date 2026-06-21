@@ -239,6 +239,22 @@ async function deleteLocalFile(entry, root) {
   }
 }
 
+async function cleanupEmptyParentDirectories(root, relativePath) {
+  let currentPath = path.dirname(toLocalAbsolutePath(root, relativePath));
+  const resolvedRoot = path.resolve(root);
+
+  while (currentPath !== resolvedRoot) {
+    try {
+      const contents = await fs.promises.readdir(currentPath);
+      if (contents.length > 0) break;
+      await fs.promises.rmdir(currentPath);
+    } catch {
+      break;
+    }
+    currentPath = path.dirname(currentPath);
+  }
+}
+
 async function isLocalDirectoryEntry(entry, root) {
   if (entry.isFolder) {
     return true;
@@ -381,6 +397,13 @@ export async function executeStaged(drive, root, progress) {
       }
     })
   );
+
+  const successfulLocalFileDeletes = localFileDeletes
+    .filter(({ entry }) => !failedPaths.has(entry.path))
+    .sort((left, right) => right.entry.path.split("/").length - left.entry.path.split("/").length);
+  for (const { entry } of successfulLocalFileDeletes) {
+    await cleanupEmptyParentDirectories(root, entry.localPath || entry.path);
+  }
 
   for (const { entry } of localFolderDeletes) {
     try {

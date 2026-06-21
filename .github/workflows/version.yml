@@ -67,7 +67,13 @@ jobs:
 
       - name: Publish to npm
         if: steps.npm_publish.outputs.should_publish == 'true'
-        run: npm publish --access public
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          if [[ "$PACKAGE_VERSION" == *-* ]]; then
+            npm publish --access public --tag beta
+          else
+            npm publish --access public
+          fi
 
   release:
     if: github.event_name == 'workflow_dispatch'
@@ -182,7 +188,13 @@ jobs:
 
       - name: Publish to npm
         if: steps.npm_publish.outputs.should_publish == 'true'
-        run: npm publish --access public
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          if [[ "$PACKAGE_VERSION" == *-* ]]; then
+            npm publish --access public --tag beta
+          else
+            npm publish --access public
+          fi
 
       # ── Publish to GitHub Packages ──
       - name: Setup GitHub Packages registry

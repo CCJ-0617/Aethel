@@ -609,6 +609,87 @@ test("computeDiff lets remote-deleted folders delete matching local folders with
   assert.equal(diff.changes[0].suggestedAction, "delete_local");
 });
 
+test("computeDiff collapses remote deletion of non-empty folder to parent local delete", () => {
+  const snapshot = {
+    files: {
+      "remote-a": {
+        id: "remote-a",
+        path: "courses/compiler/specs/lab1.pdf",
+        localPath: "courses/compiler/specs/lab1.pdf",
+        md5Checksum: "lab-md5",
+      },
+      "remote-b": {
+        id: "remote-b",
+        path: "courses/compiler/src/main.c",
+        localPath: "courses/compiler/src/main.c",
+        md5Checksum: "main-md5",
+      },
+      "remote-sibling": {
+        id: "remote-sibling",
+        path: "courses/math/notes.md",
+        localPath: "courses/math/notes.md",
+        md5Checksum: "math-md5",
+      },
+    },
+    localFiles: {
+      "courses/compiler/specs/lab1.pdf": {
+        localPath: "courses/compiler/specs/lab1.pdf",
+        md5: "lab-md5",
+      },
+      "courses/compiler/src/main.c": {
+        localPath: "courses/compiler/src/main.c",
+        md5: "main-md5",
+      },
+      "courses/math/notes.md": {
+        localPath: "courses/math/notes.md",
+        md5: "math-md5",
+      },
+    },
+  };
+
+  const remoteFiles = [
+    {
+      id: "remote-sibling",
+      path: "courses/math/notes.md",
+      md5Checksum: "math-md5",
+    },
+  ];
+
+  const localFiles = {
+    "courses/compiler/specs/lab1.pdf": {
+      localPath: "courses/compiler/specs/lab1.pdf",
+      md5: "lab-md5",
+    },
+    "courses/compiler/src/main.c": {
+      localPath: "courses/compiler/src/main.c",
+      md5: "main-md5",
+    },
+    "courses/math/notes.md": {
+      localPath: "courses/math/notes.md",
+      md5: "math-md5",
+    },
+  };
+
+  const diff = computeDiff(snapshot, remoteFiles, localFiles);
+
+  assert.deepEqual(
+    diff.changes.map((change) => ({
+      type: change.changeType,
+      path: change.path,
+      action: change.suggestedAction,
+      isFolder: change.snapshotMeta?.isFolder,
+    })),
+    [
+      {
+        type: ChangeType.REMOTE_DELETED,
+        path: "courses/compiler",
+        action: "delete_local",
+        isFolder: true,
+      },
+    ]
+  );
+});
+
 test("computeDiff ignores historical snapshot entries that now match .aethelignore", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aethel-diff-"));
 
