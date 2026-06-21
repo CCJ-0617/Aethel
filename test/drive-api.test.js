@@ -623,6 +623,20 @@ test("executeStaged does not create duplicate folders during concurrent uploads"
         item.parents.includes(rootFolders[0].id)
     );
     assert.equal(docsFolders.length, 1);
+
+    const queries = drive.listQueries();
+    assert.equal(
+      queries.filter((query) => query === `'${docsFolders[0].id}' in parents and trashed = false`).length,
+      1
+    );
+    assert.equal(
+      queries.filter(
+        (query) =>
+          query.includes(`'${docsFolders[0].id}' in parents`) &&
+          /name = 'file-\d+\.txt'/.test(query)
+      ).length,
+      0
+    );
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }
@@ -667,6 +681,64 @@ test("executeStaged downloads staged files without an extra metadata request", a
     assert.equal(metadataGets, 0);
     assert.equal(mediaGets, 1);
     assert.equal(await fs.readFile(path.join(workspaceRoot, "fast.txt"), "utf8"), "downloaded content");
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("executeStaged reuses snapshot metadata for staged downloads", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-fast-download-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    const content = Buffer.from("downloaded from snapshot metadata");
+    writeSnapshot(workspaceRoot, {
+      timestamp: "2026-06-21T00:00:00.000Z",
+      message: "snapshot",
+      files: {
+        "remote-fast": {
+          path: "fast.txt",
+          mimeType: "text/plain",
+          md5Checksum: md5(content),
+          modifiedTime: "2026-06-21T00:00:00.000Z",
+        },
+      },
+      localFiles: {},
+    });
+    writeIndex(workspaceRoot, {
+      staged: [
+        {
+          action: "download",
+          path: "fast.txt",
+          localPath: "fast.txt",
+          fileId: "remote-fast",
+          remotePath: "fast.txt",
+        },
+      ],
+    });
+
+    let metadataGets = 0;
+    let mediaGets = 0;
+    const result = await executeStaged({
+      files: {
+        async get(params) {
+          if (params.alt === "media") {
+            mediaGets += 1;
+            return { data: Readable.from([content]) };
+          }
+          metadataGets += 1;
+          throw new Error("metadata should be loaded from snapshot");
+        },
+      },
+    }, workspaceRoot);
+
+    assert.equal(result.downloaded, 1);
+    assert.equal(metadataGets, 0);
+    assert.equal(mediaGets, 1);
+    assert.equal(
+      await fs.readFile(path.join(workspaceRoot, "fast.txt"), "utf8"),
+      "downloaded from snapshot metadata"
+    );
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }

@@ -1111,7 +1111,12 @@ export async function uploadFile(
   drive,
   localPath,
   remotePath,
-  { parentId = null, existingId = null, cleanupDuplicates = false } = {}
+  {
+    parentId = null,
+    existingId = null,
+    cleanupDuplicates = false,
+    childIndexCache = null,
+  } = {}
 ) {
   const name = path.basename(remotePath);
   const makeMedia = () => ({ body: fs.createReadStream(localPath) });
@@ -1127,7 +1132,13 @@ export async function uploadFile(
         fields: "id,name,parents,md5Checksum,modifiedTime,size,mimeType",
       });
       if (cleanupDuplicates) {
-        await trashDuplicateUploadTargets(drive, targetParentId, name, response.data.id);
+        await trashDuplicateUploadTargets(
+          drive,
+          targetParentId,
+          name,
+          response.data.id,
+          childIndexCache
+        );
       }
       return response.data;
     } catch (err) {
@@ -1138,7 +1149,12 @@ export async function uploadFile(
   }
 
   if (cleanupDuplicates) {
-    const existing = await findUploadTargetByName(drive, targetParentId, name);
+    const existing = await findUploadTargetByName(
+      drive,
+      targetParentId,
+      name,
+      childIndexCache
+    );
     if (existing) {
       const response = await drive.files.update({
         fileId: existing.id,
@@ -1164,7 +1180,13 @@ export async function uploadFile(
     fields: "id,name,parents,md5Checksum,modifiedTime,size,mimeType",
   });
   if (cleanupDuplicates) {
-    await trashDuplicateUploadTargets(drive, targetParentId, name, response.data.id);
+    await trashDuplicateUploadTargets(
+      drive,
+      targetParentId,
+      name,
+      response.data.id,
+      childIndexCache
+    );
   }
   return response.data;
 }
@@ -1177,13 +1199,25 @@ function isMissingLocalFileError(err) {
   return err?.code === "ENOENT" || err?.code === "ENOTDIR";
 }
 
-async function findUploadTargetByName(drive, parentId, name) {
-  const matches = await listMatchingChildren(drive, parentId, name);
+async function findUploadTargetByName(drive, parentId, name, childIndexCache = null) {
+  const index = await getChildNameIndex(drive, parentId, childIndexCache);
+  const matches = index
+    ? index.get(name) || []
+    : await listMatchingChildren(drive, parentId, name);
   return matches.find((item) => item.mimeType !== FOLDER_MIME) || null;
 }
 
-async function trashDuplicateUploadTargets(drive, parentId, name, keepId) {
-  const matches = await listMatchingChildren(drive, parentId, name);
+async function trashDuplicateUploadTargets(
+  drive,
+  parentId,
+  name,
+  keepId,
+  childIndexCache = null
+) {
+  const index = await getChildNameIndex(drive, parentId, childIndexCache);
+  const matches = index
+    ? index.get(name) || []
+    : await listMatchingChildren(drive, parentId, name);
   const duplicates = matches.filter(
     (item) => item.id !== keepId && item.mimeType !== FOLDER_MIME
   );

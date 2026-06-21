@@ -15,8 +15,8 @@ def write_cast():
         # Header
         header = {
             "version": 2,
-            "width": 90,
-            "height": 26, # a bit taller for the diff output
+            "width": 96,
+            "height": 30, # taller for diff output plus the TUI refresh snapshot
             "timestamp": int(time.time()),
             "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}
         }
@@ -112,6 +112,24 @@ def write_cast():
         type_text("aethel status")
         current_time += 0.3
         log("Everything up to date.", 0.2)
+        log("")
+        current_time += 1.0
+
+        # Command 7: aethel tui
+        type_text("aethel tui")
+        current_time += 0.4
+        log("\x1b[36mAethel  demo@example.com  1.2 GB/15.0 GB\x1b[0m", 0.15)
+        log("\x1b[36m> Local\x1b[0m                                      Drive", 0.1)
+        log("  /Users/demo/my-drive                         /", 0.1)
+        log("  [LOC] [DIR]  DIR   drafts                    [ ] [MY] [DIR]  DIR   docs", 0.08)
+        log("  [LOC] [DIR]  DIR   notes                     [ ] [MY] [FIL]  2 KB  spec.txt", 0.08)
+        log("  [LOC] [FIL]  1 KB  ideas.txt                 [ ] [MY] [FIL]  1 KB  roadmap.txt", 0.5)
+        log("\x1b[32mRenamed local entry to: ideas-renamed.txt\x1b[0m", 0.6)
+        log("  [LOC] [DIR]  DIR   drafts                    [ ] [MY] [DIR]  DIR   docs", 0.08)
+        log("  [LOC] [DIR]  DIR   notes                     [ ] [MY] [FIL]  2 KB  spec.txt", 0.08)
+        log("  [LOC] [FIL]  1 KB  ideas-renamed.txt         [ ] [MY] [FIL]  1 KB  roadmap.txt", 0.5)
+        log("\x1b[32mDeleted local entry: todo.txt\x1b[0m", 0.6)
+        log("\x1b[2mLocal pane refreshed automatically. Press r to reload both panes.\x1b[0m", 0.2)
         log("")
         current_time += 3.0 # hold final screen
         

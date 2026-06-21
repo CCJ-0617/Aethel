@@ -19,6 +19,10 @@ const CONCURRENCY = readPositiveIntEnv(
   "AETHEL_TRANSFER_CONCURRENCY",
   readPositiveIntEnv("AETHEL_DRIVE_CONCURRENCY", 20)
 );
+const CHILD_INDEX_UPLOAD_THRESHOLD = readPositiveIntEnv(
+  "AETHEL_CHILD_INDEX_UPLOAD_THRESHOLD",
+  3
+);
 
 function isMissingLocalFileError(err) {
   return err?.code === "ENOENT" || err?.code === "ENOTDIR";
@@ -31,6 +35,58 @@ function toLocalAbsolutePath(root, relativePath) {
     throw new Error(`Path traversal blocked: ${relativePath} resolves outside workspace`);
   }
   return abs;
+}
+
+function createTransferContext(staged) {
+  const uploadParentCounts = new Map();
+
+  for (const entry of staged) {
+    if (entry.action !== "upload" || entry.isFolder) {
+      continue;
+    }
+    const remotePath = entry.remotePath || entry.path;
+    const parentPath = path.posix.dirname(remotePath);
+    const normalizedParentPath = parentPath && parentPath !== "." ? parentPath : "";
+    uploadParentCounts.set(
+      normalizedParentPath,
+      (uploadParentCounts.get(normalizedParentPath) || 0) + 1
+    );
+  }
+
+  return {
+    childIndexCache: new Map(),
+    folderIdByPath: new Map(),
+    uploadParentCounts,
+  };
+}
+
+function transferFolderCacheKey(rootId, folderPath) {
+  return `${rootId || "root"}\0${folderPath || ""}`;
+}
+
+async function ensureFolderCached(drive, folderPath, rootId, context) {
+  if (!folderPath || folderPath === ".") {
+    return rootId || "root";
+  }
+
+  if (!context?.folderIdByPath) {
+    return ensureFolder(drive, folderPath, rootId);
+  }
+
+  const cacheKey = transferFolderCacheKey(rootId, folderPath);
+  let pending = context.folderIdByPath.get(cacheKey);
+  if (!pending) {
+    pending = ensureFolder(drive, folderPath, rootId);
+    context.folderIdByPath.set(cacheKey, pending);
+  }
+  return pending;
+}
+
+function snapshotFileMeta(snapshot, fileId) {
+  if (!fileId) {
+    return null;
+  }
+  return snapshot?.files?.[fileId] || null;
 }
 
 export class CommitResult {
@@ -79,7 +135,7 @@ export class CommitResult {
   }
 }
 
-async function downloadStagedFile(drive, entry, root) {
+async function downloadStagedFile(drive, entry, root, snapshot = null) {
   const localRelativePath = entry.localPath || entry.path;
   const localAbsolutePath = toLocalAbsolutePath(root, localRelativePath);
 
@@ -90,14 +146,17 @@ async function downloadStagedFile(drive, entry, root) {
   }
 
   const fileId = entry.fileId;
+  const snapMeta = snapshotFileMeta(snapshot, fileId);
   let fileMeta = {
     id: fileId,
-    name: path.posix.basename(entry.remotePath || entry.path || fileId),
-    mimeType: entry.remoteMimeType || "",
-    md5Checksum: entry.remoteMd5Checksum || null,
+    name: path.posix.basename(
+      entry.remotePath || entry.path || snapMeta?.path || fileId
+    ),
+    mimeType: entry.remoteMimeType || snapMeta?.mimeType || "",
+    md5Checksum: entry.remoteMd5Checksum || snapMeta?.md5Checksum || null,
   };
 
-  if (!entry.remoteMimeType) {
+  if (!fileMeta.mimeType && !fileMeta.md5Checksum) {
     const response = await drive.files.get({
       fileId,
       fields: "id,name,mimeType,md5Checksum",
@@ -113,7 +172,7 @@ async function handleMissingUploadSource(drive, entry, snapshot, driveFolderId) 
   return deleted ? "deleted_remote" : "skipped";
 }
 
-async function uploadStagedFile(drive, entry, root, driveFolderId, snapshot) {
+async function uploadStagedFile(drive, entry, root, driveFolderId, snapshot, context = null) {
   const localRelativePath = entry.localPath || entry.path;
   const remotePath = entry.remotePath || entry.path;
   const localAbsolutePath = toLocalAbsolutePath(root, localRelativePath);
@@ -130,15 +189,24 @@ async function uploadStagedFile(drive, entry, root, driveFolderId, snapshot) {
 
   // Empty folder: just ensure it exists on Drive
   if (entry.isFolder || localStat.isDirectory()) {
-    await ensureFolder(drive, remotePath, driveFolderId);
+    await ensureFolderCached(drive, remotePath, driveFolderId, context);
     return "folder_created";
   }
 
   const parentPath = path.posix.dirname(remotePath);
   let parentId = driveFolderId || "root";
+  let childIndexCache = null;
 
   if (parentPath && parentPath !== ".") {
-    parentId = await ensureFolder(drive, parentPath, driveFolderId);
+    parentId = await ensureFolderCached(drive, parentPath, driveFolderId, context);
+  }
+
+  const normalizedParentPath = parentPath && parentPath !== "." ? parentPath : "";
+  if (
+    context?.uploadParentCounts?.get(normalizedParentPath) >=
+    CHILD_INDEX_UPLOAD_THRESHOLD
+  ) {
+    childIndexCache = context.childIndexCache;
   }
 
   let uploadResult;
@@ -147,6 +215,7 @@ async function uploadStagedFile(drive, entry, root, driveFolderId, snapshot) {
       parentId,
       existingId: entry.fileId || null,
       cleanupDuplicates: true,
+      childIndexCache,
     });
   } catch (err) {
     if (isMissingLocalFileError(err)) {
@@ -355,6 +424,7 @@ export async function executeStaged(drive, root, progress) {
   const snapshot = readLatestSnapshot(root);
   const driveFolderId = config.drive_folder_id || null;
   const result = new CommitResult();
+  const transferContext = createTransferContext(staged);
 
   // Local deletes can run fully in parallel — no API rate limits.
   // Remote operations (download, upload, delete_remote) share a concurrency pool.
@@ -420,11 +490,18 @@ export async function executeStaged(drive, root, progress) {
     return async () => {
       const action = entry.action;
       if (action === "download") {
-        await downloadStagedFile(drive, entry, root);
+        await downloadStagedFile(drive, entry, root, snapshot);
         if (entry.isFolder) result.foldersCreated++;
         else result.downloaded++;
       } else if (action === "upload") {
-        const outcome = await uploadStagedFile(drive, entry, root, driveFolderId, snapshot);
+        const outcome = await uploadStagedFile(
+          drive,
+          entry,
+          root,
+          driveFolderId,
+          snapshot,
+          transferContext
+        );
         if (outcome === "folder_created") result.foldersCreated++;
         else if (outcome === "uploaded") result.uploaded++;
         else if (outcome === "deleted_remote") result.deletedRemote++;

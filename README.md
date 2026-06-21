@@ -286,6 +286,9 @@ aethel tui
 ```
 
 Dual-pane file browser — local filesystem on the left, Google Drive on the right.
+The local pane watches the current directory, so edits, renames, and deletes show
+up without a manual reload. Successful Drive trash/delete actions also update the
+pane immediately while Aethel reloads the authoritative Drive listing.
 
 | Key                  | Action                                             |
 | -------------------- | -------------------------------------------------- |
@@ -301,6 +304,7 @@ Dual-pane file browser — local filesystem on the left, Google Drive on the rig
 | `/`                | Filter by name                                     |
 | `f`                | Open the commands page and choose a TUI action     |
 | `:`                | Run any Aethel CLI command inside the TUI          |
+| `r`                | Reload local and Drive panes                       |
 
 ## Directory Packing
 

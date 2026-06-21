@@ -6,38 +6,89 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
+import {
+  initWorkspace,
+  readConfig,
+  requireRoot,
+} from "./core/config.js";
+import { createDefaultIgnoreFile, loadIgnoreRules } from "./core/ignore.js";
+import { createProgressBar, createSpinner } from "./core/progress.js";
+import { summarizeChanges, summarizeStagedEntries } from "./core/change-summary.js";
+import { remoteCacheEnabledByDefault } from "./core/sync-cache-policy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8"));
 
+let authModulePromise;
+let diffModulePromise;
+let driveApiModulePromise;
+let refsModulePromise;
+let repositoryModulePromise;
+let stagingModulePromise;
+let tuiModulePromise;
+
+function lazyImport(currentPromise, modulePath) {
+  return currentPromise || import(modulePath);
+}
+
+async function loadAuthModule() {
+  authModulePromise = lazyImport(authModulePromise, "./core/auth.js");
+  return authModulePromise;
+}
+
+async function loadDiffModule() {
+  diffModulePromise = lazyImport(diffModulePromise, "./core/diff.js");
+  return diffModulePromise;
+}
+
+async function loadDriveApiModule() {
+  driveApiModulePromise = lazyImport(driveApiModulePromise, "./core/drive-api.js");
+  return driveApiModulePromise;
+}
+
+async function loadRefsModule() {
+  refsModulePromise = lazyImport(refsModulePromise, "./core/refs.js");
+  return refsModulePromise;
+}
+
+async function loadRepositoryClass() {
+  repositoryModulePromise = lazyImport(repositoryModulePromise, "./core/repository.js");
+  return (await repositoryModulePromise).Repository;
+}
+
+async function loadStagingModule() {
+  stagingModulePromise = lazyImport(stagingModulePromise, "./core/staging.js");
+  return stagingModulePromise;
+}
+
+async function loadTuiModule() {
+  tuiModulePromise = lazyImport(tuiModulePromise, "./tui/index.js");
+  return tuiModulePromise;
+}
+
+async function createRepository(root, options = {}) {
+  const Repository = await loadRepositoryClass();
+  return new Repository(root, options);
+}
+
 function getGitHash() {
+  const repoRoot = path.resolve(__dirname, "..");
+  if (!fs.existsSync(path.join(repoRoot, ".git"))) {
+    return null;
+  }
+
   try {
-    return execSync("git rev-parse --short HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    return execSync("git rev-parse --short HEAD", {
+      cwd: repoRoot,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).toString().trim();
   } catch {
     return null;
   }
 }
 
-const gitHash = getGitHash();
+const gitHash = process.argv.includes("--version") ? getGitHash() : null;
 const versionString = gitHash ? `${pkg.version} (${gitHash})` : pkg.version;
-import { persistCredentials, resolveCredentialsPath, resolveTokenPath } from "./core/auth.js";
-import {
-  initWorkspace,
-  requireRoot,
-} from "./core/config.js";
-import { ChangeType, changesWithLocalAuthority } from "./core/diff.js";
-import {
-  dedupeDuplicateFiles,
-  dedupeDuplicateFolders,
-  DuplicateFoldersError,
-} from "./core/drive-api.js";
-import { createDefaultIgnoreFile, loadIgnoreRules } from "./core/ignore.js";
-import { createProgressBar, createSpinner } from "./core/progress.js";
-import { Repository } from "./core/repository.js";
-import { summarizeChanges, summarizeStagedEntries } from "./core/change-summary.js";
-import { conflictResolutionChange } from "./core/staging.js";
-import { remoteCacheEnabledByDefault } from "./core/sync-cache-policy.js";
-import { runTui } from "./tui/index.js";
 
 const REQUIRED_CONFIRMATION = "DELETE ALL MY GOOGLE DRIVE FILES";
 const REQUIRED_IGNORED_CONFIRMATION = "DELETE IGNORED GOOGLE DRIVE FILES";
@@ -121,7 +172,7 @@ function addAuthOptions(command) {
 
 async function openRepo(options, { requireWorkspace = true, silent = false } = {}) {
   const root = requireWorkspace ? requireRoot() : null;
-  const repo = new Repository(root, {
+  const repo = await createRepository(root, {
     credentials: options.credentials,
     token: options.token,
     forceAuth: options.forceAuth,
@@ -320,6 +371,8 @@ async function handleAuth(options) {
   const account = await repo.getAccountInfo();
   spinner.succeed(`Authenticated as ${account.email}`);
 
+  const { persistCredentials, resolveCredentialsPath, resolveTokenPath } =
+    await loadAuthModule();
   const credentialsPath = resolveCredentialsPath(options.credentials);
   await persistCredentials(credentialsPath);
 
@@ -356,7 +409,7 @@ async function handleClone(remote, directory, options) {
     return;
   }
 
-  const repo = new Repository(root, {
+  const repo = await createRepository(root, {
     credentials: options.credentials,
     token: options.token,
   });
@@ -382,10 +435,9 @@ async function handleClone(remote, directory, options) {
   });
 }
 
-function handleRemote(subcommand, args, options) {
+async function handleRemote(subcommand, args, options) {
   const root = requireRoot();
-  const repo = new Repository(root);
-  const config = repo.getConfig();
+  const config = readConfig(root);
   const name = options.remoteName || "origin";
   const driveFolderId = config.drive_folder_id || null;
   const driveRef = driveFolderId ? `drive://${driveFolderId}` : "drive://root";
@@ -429,16 +481,20 @@ function handleRemote(subcommand, args, options) {
   throw new Error("Usage: aethel remote [-v] | remote show [origin] | remote get-url [origin]");
 }
 
-function handleBranch(args, options) {
+async function handleBranch(args, options) {
+  const {
+    createBranch,
+    deleteBranch,
+    getBranches,
+  } = await loadRefsModule();
   const root = requireRoot();
-  const repo = new Repository(root);
-  const config = repo.getConfig();
+  const config = readConfig(root);
   const remote = config.drive_folder_id ? `drive://${config.drive_folder_id}` : "drive://root";
-  const state = repo.getBranches();
+  const state = getBranches(root);
 
   if (options.delete) {
     for (const name of args) {
-      if (repo.deleteBranch(name)) {
+      if (deleteBranch(root, name)) {
         console.log(`Deleted branch '${name}'.`);
       } else {
         console.log(`Branch '${name}' not found.`);
@@ -449,7 +505,7 @@ function handleBranch(args, options) {
 
   if (args.length > 0) {
     const [name, ref = "HEAD"] = args;
-    const branch = repo.createBranch(name, ref, { force: Boolean(options.force) });
+    const branch = createBranch(root, name, ref, { force: Boolean(options.force) });
     console.log(`Created branch ${name} at ${branch.ref}.`);
     return;
   }
@@ -466,10 +522,10 @@ function handleBranch(args, options) {
   }
 }
 
-function handleSwitch(branchName, options) {
+async function handleSwitch(branchName, options) {
+  const { switchBranch } = await loadRefsModule();
   const root = requireRoot();
-  const repo = new Repository(root);
-  const branch = repo.switchBranch(branchName, {
+  const branch = switchBranch(root, branchName, {
     create: Boolean(options.create),
     ref: options.startPoint || "HEAD",
   });
@@ -483,14 +539,14 @@ function handleSwitch(branchName, options) {
   console.log("  Branch has no snapshot yet.");
 }
 
-function handleTag(args, options) {
+async function handleTag(args, options) {
+  const { createTag, deleteTag, getTags } = await loadRefsModule();
   const root = requireRoot();
-  const repo = new Repository(root);
-  const tags = repo.getTags();
+  const tags = getTags(root);
 
   if (options.delete) {
     for (const name of args) {
-      if (repo.deleteTag(name)) {
+      if (deleteTag(root, name)) {
         console.log(`Deleted tag '${name}'.`);
       } else {
         console.log(`Tag '${name}' not found.`);
@@ -516,7 +572,7 @@ function handleTag(args, options) {
   }
 
   const [name, ref = "HEAD"] = args;
-  const tag = repo.createTag(name, ref, { force: Boolean(options.force) });
+  const tag = createTag(root, name, ref, { force: Boolean(options.force) });
   console.log(`Tagged ${tag.ref} as ${name}.`);
 }
 
@@ -813,22 +869,22 @@ async function handleAdd(paths, options) {
   console.log(`Staged ${stagedCount} change(s).`);
 }
 
-function handleReset(paths, options) {
+async function handleReset(paths, options) {
+  const { unstageAll, unstagePath } = await loadStagingModule();
   const root = requireRoot();
-  const repo = new Repository(root);
   const resetPaths = [...(paths || [])];
   if (resetPaths[0] === "HEAD" || resetPaths[0] === "--") {
     resetPaths.shift();
   }
 
   if (options.all || resetPaths.length === 0) {
-    const count = repo.unstageAll();
+    const count = unstageAll(root);
     console.log(`Unstaged ${count} change(s).`);
     return;
   }
 
   for (const targetPath of resetPaths) {
-    if (repo.unstagePath(targetPath)) {
+    if (unstagePath(root, targetPath)) {
       console.log(`  Unstaged: ${targetPath}`);
       continue;
     }
@@ -874,10 +930,10 @@ async function handleCommit(options, { repo: existingRepo, snapshotHint } = {}) 
   spinner.succeed(`Snapshot saved in ${fmtMs(Date.now() - snapshotStart)}${hint}`);
 }
 
-function handleLog(options) {
+async function handleLog(options) {
+  const { getHistory } = await loadRefsModule();
   const root = requireRoot();
-  const repo = new Repository(root);
-  const entries = repo.getHistory(options.limit || 10);
+  const entries = getHistory(root, options.limit || 10);
 
   if (!entries.length) {
     console.log("No commits yet.");
@@ -941,6 +997,8 @@ async function handleFetch(options) {
 }
 
 async function handlePull(paths, options) {
+  const { ChangeType } = await loadDiffModule();
+  const { conflictResolutionChange } = await loadStagingModule();
   const debug = createDebugLogger(options);
   debug("pull start", {
     force: Boolean(options.force),
@@ -1060,6 +1118,8 @@ async function handlePull(paths, options) {
 }
 
 async function handlePush(paths, options) {
+  const { ChangeType, changesWithLocalAuthority } = await loadDiffModule();
+  const { conflictResolutionChange } = await loadStagingModule();
   const debug = createDebugLogger(options);
   debug("push start", {
     force: Boolean(options.force),
@@ -1161,6 +1221,7 @@ async function handlePush(paths, options) {
 }
 
 async function handleResolve(paths, options) {
+  const { conflictResolutionChange } = await loadStagingModule();
   const repo = await openRepo(options);
   const { diff } = await loadStateWithProgress(repo);
   const conflicts = diff.conflicts;
@@ -1272,18 +1333,18 @@ function handleIgnore(subcommand, args) {
   console.log("Usage: aethel ignore <list|test|create> [paths...]");
 }
 
-function handleShow(ref, options) {
+async function handleShow(ref, options) {
+  const { getHistory, getSnapshotByRef } = await loadRefsModule();
   const root = requireRoot();
-  const repo = new Repository(root);
 
-  const snapshot = repo.getSnapshotByRef(ref);
+  const snapshot = getSnapshotByRef(root, ref);
 
   if (!snapshot) {
     if (!ref || ref === "HEAD" || ref === "latest") {
       console.log("No commits yet.");
     } else {
       console.log(`No snapshot matching '${ref}' found.`);
-      const history = repo.getHistory(10);
+      const history = getHistory(root, 10);
       if (history.length) {
         console.log("Available snapshots:");
         for (const s of history) {
@@ -1343,13 +1404,13 @@ function handleShow(ref, options) {
   }
 }
 
-function handleRevParse(refs, options) {
+async function handleRevParse(refs, options) {
+  const { getBranches, getSnapshotByRef } = await loadRefsModule();
   const root = requireRoot();
-  const repo = new Repository(root);
   const targets = refs.length ? refs : ["HEAD"];
 
   if (options.abbrevRef) {
-    const { current, branches } = repo.getBranches();
+    const { current, branches } = getBranches(root);
     for (const ref of targets) {
       if (ref === "HEAD") {
         console.log(current || "main");
@@ -1363,7 +1424,7 @@ function handleRevParse(refs, options) {
   }
 
   for (const ref of targets) {
-    const snapshot = repo.getSnapshotByRef(ref);
+    const snapshot = getSnapshotByRef(root, ref);
     if (!snapshot) {
       throw new Error(`No snapshot matching '${ref}' found.`);
     }
@@ -1393,13 +1454,14 @@ function formatCliError(error) {
 
 async function handleRestore(paths, options) {
   if (options.staged) {
-    handleReset(paths, { all: paths.length === 0 });
+    await handleReset(paths, { all: paths.length === 0 });
     return;
   }
 
   const source = options.source || "HEAD";
-  const localRepo = new Repository(requireRoot());
-  const snapshot = localRepo.getSnapshotByRef(source);
+  const rootForSnapshot = requireRoot();
+  const { getSnapshotByRef } = await loadRefsModule();
+  const snapshot = getSnapshotByRef(rootForSnapshot, source);
 
   if (!snapshot) {
     if (source === "HEAD" || source === "latest") {
@@ -1450,15 +1512,15 @@ async function handleCheckout(args, options) {
   }
 
   if (options.branch) {
-    handleSwitch(options.branch, { create: true, startPoint: targets[0] || "HEAD" });
+    await handleSwitch(options.branch, { create: true, startPoint: targets[0] || "HEAD" });
     return;
   }
 
   if (targets.length === 1) {
     const root = requireRoot();
-    const repo = new Repository(root);
-    if (repo.getBranches().branches[targets[0]]) {
-      handleSwitch(targets[0], { create: false });
+    const { getBranches } = await loadRefsModule();
+    if (getBranches(root).branches[targets[0]]) {
+      await handleSwitch(targets[0], { create: false });
       return;
     }
   }
@@ -1471,6 +1533,7 @@ async function handleCheckout(args, options) {
 }
 
 async function handleRm(paths, options) {
+  const { ChangeType } = await loadDiffModule();
   const repo = await openRepo(options);
   const { diff } = await loadStateWithProgress(repo);
   const root = repo.root;
@@ -1521,7 +1584,7 @@ async function handleVerify(options) {
   const checkRemote = Boolean(options.remote);
   const repo = checkRemote
     ? await openRepo(options)
-    : (() => { const root = requireRoot(); return new Repository(root); })();
+    : await createRepository(requireRoot());
 
   const snapshot = repo.getSnapshot();
   if (!snapshot) {
@@ -1590,6 +1653,7 @@ async function handleVerify(options) {
 
 async function handleTui(options) {
   const repo = await openRepo(options, { requireWorkspace: false, silent: true });
+  const { runTui } = await loadTuiModule();
   const cliArgs = [];
   if (options.credentials) {
     cliArgs.push("--credentials", options.credentials);
@@ -1638,6 +1702,7 @@ function printDedupeFilesSummary(result) {
 }
 
 async function handleDedupeFolders(options) {
+  const { dedupeDuplicateFolders, DuplicateFoldersError } = await loadDriveApiModule();
   const repo = await openRepo(options);
   const config = repo.getConfig();
   const rootFolderId = config.drive_folder_id || null;
@@ -1690,6 +1755,7 @@ async function handleDedupeFolders(options) {
 }
 
 async function handleDedupeFiles(options) {
+  const { dedupeDuplicateFiles } = await loadDriveApiModule();
   const repo = await openRepo(options);
   const config = repo.getConfig();
   const rootFolderId = config.drive_folder_id || null;

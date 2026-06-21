@@ -282,6 +282,8 @@ The TUI is useful for:
 - Selecting items and deleting them
 - Uploading files or entire folders directly from local storage
 - Finding files quickly with filters
+- Watching the current local directory for edits, renames, and deletes while
+  keeping Drive operations reconciled by a fresh remote reload
 
 If the goal is traceable, repeatable synchronization, the CLI workflow should still be the default choice.
 

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import React, { useEffect, useMemo, useState } from "react";
@@ -438,6 +439,44 @@ export function AethelTui({
     void loadAllData();
   }, []);
 
+  useEffect(() => {
+    let refreshTimer = null;
+    let disposed = false;
+    let watcher = null;
+
+    const refreshLocalPane = () => {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+
+      refreshTimer = setTimeout(() => {
+        if (disposed) {
+          return;
+        }
+
+        loadLocalPane(localDirectory).catch((error) => {
+          if (!disposed) {
+            setStatus(`Local refresh failed: ${error.message}`);
+          }
+        });
+      }, 100);
+    };
+
+    try {
+      watcher = fs.watch(localDirectory, { persistent: false }, refreshLocalPane);
+    } catch {
+      return () => {};
+    }
+
+    return () => {
+      disposed = true;
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      watcher?.close();
+    };
+  }, [localDirectory, repo]);
+
   async function executeRemoteDelete(permanent) {
     const targets = remoteFiles.filter((file) => selectedRemoteIds.has(file.id));
     if (targets.length === 0) {
@@ -454,6 +493,14 @@ export function AethelTui({
           setStatus(`[${done}/${total}] ${verb}: ${name}`);
         },
       });
+      const targetIds = new Set(targets.map((file) => file.id));
+
+      if (result.errors === 0) {
+        setRemoteFiles((current) =>
+          current.filter((file) => !targetIds.has(file.id))
+        );
+        setSelectedRemoteIds(new Set());
+      }
 
       await loadAllData(
         `Done: ${result.success} succeeded, ${result.errors} failed.`,
@@ -526,10 +573,13 @@ export function AethelTui({
   async function executeLocalDelete(targetPath) {
     setMode("busy");
     try {
-      await repo.deleteLocalEntry(targetPath);
-      await loadLocalPane(path.dirname(targetPath) === targetPath ? localDirectory : localDirectory);
+      const deletedPath = await repo.deleteLocalEntry(targetPath);
+      setLocalEntries((current) =>
+        current.filter((entry) => entry.absolutePath !== deletedPath)
+      );
+      await loadLocalPane(localDirectory);
       setMode("normal");
-      setStatus(`Deleted local entry: ${path.basename(targetPath)}`);
+      setStatus(`Deleted local entry: ${path.basename(deletedPath)}`);
     } catch (error) {
       setMode("normal");
       setStatus(`Local delete failed: ${error.message}`);
@@ -540,6 +590,18 @@ export function AethelTui({
     setMode("busy");
     try {
       const renamedPath = await repo.renameLocalEntry(targetPath, nextName);
+      setLocalEntries((current) =>
+        current.map((entry) =>
+          entry.absolutePath === path.resolve(targetPath)
+            ? {
+                ...entry,
+                id: renamedPath,
+                name: path.basename(renamedPath),
+                absolutePath: renamedPath,
+              }
+            : entry
+        )
+      );
       await loadLocalPane(path.dirname(renamedPath));
       setMode("normal");
       setStatus(`Renamed local entry to: ${path.basename(renamedPath)}`);

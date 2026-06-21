@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.9 (2026-06-21)
+
+- Fix TUI refresh behavior so local edits, renames, and deletes show up without
+  a manual reload, and successful Drive delete actions disappear immediately
+  while Aethel reloads the Drive listing.
+- Update the README and architecture docs for the refreshed TUI behavior.
+- Regenerate the setup, init, and usage GIF demos at high quality while keeping
+  the typewriter effect, and add a repo-local cast-to-GIF renderer.
+- Improve CLI startup by lazy-loading heavier command modules and extracting
+  branch/tag ref helpers.
+- Harden staged sync/delete handling and coverage for Drive delete paths.
+
 ## 1.3.5 (2026-06-20)
 
 - Keep status fast by reusing the local remote cache instead of refreshing Drive on every stale cache.
