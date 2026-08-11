@@ -70,6 +70,113 @@ test("computeDiff carries snapshot Drive IDs for local changes", () => {
   assert.equal(deleted.suggestedAction, "delete_remote");
 });
 
+test("computeDiff collapses a remote folder rename into one local move", () => {
+  const snapshot = {
+    files: {
+      folder: { id: "folder", path: "old-name", localPath: "old-name", isFolder: true },
+      childFolder: { id: "childFolder", path: "old-name/nested", localPath: "old-name/nested", isFolder: true },
+      child: { id: "child", path: "old-name/nested/file.txt", localPath: "old-name/nested/file.txt", md5Checksum: "same" },
+    },
+    localFiles: {
+      "old-name": { localPath: "old-name", isFolder: true },
+      "old-name/nested": { localPath: "old-name/nested", isFolder: true },
+      "old-name/nested/file.txt": { localPath: "old-name/nested/file.txt", md5: "same" },
+    },
+  };
+  const remoteFiles = [
+    { id: "folder", path: "new-name", isFolder: true },
+    { id: "childFolder", path: "new-name/nested", isFolder: true },
+    { id: "child", path: "new-name/nested/file.txt", md5Checksum: "same" },
+  ];
+  const localFiles = {
+    "old-name": { localPath: "old-name", isFolder: true },
+    "old-name/nested": { localPath: "old-name/nested", isFolder: true },
+    "old-name/nested/file.txt": { localPath: "old-name/nested/file.txt", md5: "same" },
+  };
+
+  const diff = computeDiff(snapshot, remoteFiles, localFiles);
+
+  assert.deepEqual(diff.changes.map(({ changeType, path, sourcePath }) => ({ changeType, path, sourcePath })), [
+    { changeType: ChangeType.REMOTE_RENAMED, path: "new-name", sourcePath: "old-name" },
+  ]);
+  assert.equal(diff.changes[0].suggestedAction, "move_local");
+});
+
+test("computeDiff collapses a local folder rename into one remote rename", () => {
+  const snapshot = {
+    files: {
+      folder: { id: "folder", path: "old-name", localPath: "old-name", isFolder: true },
+      child: { id: "child", path: "old-name/file.txt", localPath: "old-name/file.txt", md5Checksum: "same" },
+    },
+    localFiles: {
+      "old-name": { localPath: "old-name", isFolder: true },
+      "old-name/file.txt": { localPath: "old-name/file.txt", md5: "same" },
+    },
+  };
+  const remoteFiles = [
+    { id: "folder", path: "old-name", isFolder: true },
+    { id: "child", path: "old-name/file.txt", md5Checksum: "same" },
+  ];
+  const localFiles = {
+    "new-name": { localPath: "new-name", isFolder: true },
+    "new-name/file.txt": { localPath: "new-name/file.txt", md5: "same" },
+  };
+
+  const diff = computeDiff(snapshot, remoteFiles, localFiles);
+
+  assert.deepEqual(diff.changes.map(({ changeType, path, sourcePath }) => ({ changeType, path, sourcePath })), [
+    { changeType: ChangeType.LOCAL_RENAMED, path: "new-name", sourcePath: "old-name" },
+  ]);
+  assert.equal(diff.changes[0].suggestedAction, "rename_remote");
+});
+
+test("computeDiff does not churn descendants when a folder rename already converged", () => {
+  const snapshot = {
+    files: {
+      folder: { id: "folder", path: "01_Courses", localPath: "01_Courses", isFolder: true },
+      child: { id: "child", path: "01_Courses/notes.md", localPath: "01_Courses/notes.md", md5Checksum: "same" },
+    },
+    localFiles: {
+      "01_Courses": { localPath: "01_Courses", isFolder: true },
+      "01_Courses/notes.md": { localPath: "01_Courses/notes.md", md5: "same" },
+    },
+  };
+  const remoteFiles = [
+    { id: "folder", path: "Courses", isFolder: true },
+    { id: "child", path: "Courses/notes.md", md5Checksum: "same" },
+  ];
+  const localFiles = {
+    Courses: { localPath: "Courses", isFolder: true },
+    "Courses/notes.md": { localPath: "Courses/notes.md", md5: "same" },
+  };
+
+  assert.deepEqual(computeDiff(snapshot, remoteFiles, localFiles).changes, []);
+});
+
+test("computeDiff infers a remote folder rename from descendant IDs in legacy snapshots", () => {
+  const snapshot = {
+    // Older snapshots tracked only files inside non-empty folders.
+    files: {
+      child: { id: "child", path: "01_Courses/notes.md", localPath: "01_Courses/notes.md", md5Checksum: "same" },
+    },
+    localFiles: {
+      "01_Courses/notes.md": { localPath: "01_Courses/notes.md", md5: "same" },
+    },
+  };
+  const remoteFiles = [
+    { id: "folder", path: "Courses", isFolder: true },
+    { id: "child", path: "Courses/notes.md", md5Checksum: "same" },
+  ];
+  const localFiles = {
+    "01_Courses/notes.md": { localPath: "01_Courses/notes.md", md5: "same" },
+  };
+
+  const diff = computeDiff(snapshot, remoteFiles, localFiles);
+  assert.deepEqual(diff.changes.map(({ changeType, path, sourcePath }) => ({ changeType, path, sourcePath })), [
+    { changeType: ChangeType.REMOTE_RENAMED, path: "Courses", sourcePath: "01_Courses" },
+  ]);
+});
+
 test("computeDiff treats same-path remote ID replacement as a modification", () => {
   const snapshot = {
     files: {

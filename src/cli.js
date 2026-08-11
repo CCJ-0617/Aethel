@@ -1017,28 +1017,40 @@ async function handlePull(paths, options) {
 
   if (options.all) {
     let remoteFiles = remoteState.files;
+    let remoteDeletions = diff.changes.filter(
+      (change) => change.changeType === ChangeType.REMOTE_DELETED
+    );
 
     if (paths && paths.length > 0) {
       remoteFiles = remoteFiles.filter((file) =>
         paths.some((p) => matchesPattern(file.path, p))
       );
+      remoteDeletions = remoteDeletions.filter((change) =>
+        paths.some((p) => matchesPattern(change.path, p))
+      );
     }
 
-    if (!remoteFiles.length) {
-      console.log("No remote files matched.");
+    if (!remoteFiles.length && !remoteDeletions.length) {
+      console.log("No remote changes matched.");
       return;
     }
 
     if (options.dryRun) {
-      console.log(`Would pull ${remoteFiles.length} remote item(s):`);
+      console.log(
+        `Would pull ${remoteFiles.length} remote item(s) and apply ` +
+        `${remoteDeletions.length} remote deletion(s):`
+      );
       for (const file of remoteFiles) {
         console.log(`  +R ${file.path}  (full remote download)`);
+      }
+      for (const change of remoteDeletions) {
+        console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
       }
       return;
     }
 
-    const count = repo.stageRemoteFilesForDownload(remoteFiles);
-    console.log(`Staged ${count} remote item(s). Committing...`);
+    const count = repo.stageFullRemotePull(remoteFiles, remoteDeletions);
+    console.log(`Staged ${count} remote change(s). Committing...`);
     await handleCommit({ ...options, message: options.message || "pull" }, {
       repo,
       snapshotHint: { remote: remoteState },

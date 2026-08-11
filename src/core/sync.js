@@ -8,6 +8,7 @@ import {
   trashFile,
   uploadFile,
 } from "./drive-api.js";
+import { pullPack, pushPack } from "./pack-sync.js";
 import { md5Local } from "./snapshot.js";
 
 function readPositiveIntEnv(name, fallback) {
@@ -96,6 +97,9 @@ export class CommitResult {
     this.deletedLocal = 0;
     this.deletedRemote = 0;
     this.foldersCreated = 0;
+    this.foldersRenamed = 0;
+    this.packsPushed = 0;
+    this.packsPulled = 0;
     this.errors = [];
   }
 
@@ -105,7 +109,10 @@ export class CommitResult {
       this.uploaded +
       this.deletedLocal +
       this.deletedRemote +
-      this.foldersCreated
+      this.foldersCreated +
+      this.foldersRenamed +
+      this.packsPushed +
+      this.packsPulled
     );
   }
 
@@ -120,6 +127,15 @@ export class CommitResult {
     }
     if (this.foldersCreated) {
       parts.push(`${this.foldersCreated} folders created`);
+    }
+    if (this.foldersRenamed) {
+      parts.push(`${this.foldersRenamed} folders renamed`);
+    }
+    if (this.packsPushed) {
+      parts.push(`${this.packsPushed} packs pushed`);
+    }
+    if (this.packsPulled) {
+      parts.push(`${this.packsPulled} packs pulled`);
     }
     if (this.deletedLocal) {
       parts.push(`${this.deletedLocal} deleted locally`);
@@ -308,6 +324,23 @@ async function deleteLocalFile(entry, root) {
   }
 }
 
+async function moveLocalFolder(entry, root) {
+  const sourcePath = entry.sourcePath;
+  if (!sourcePath) throw new Error("Missing source path for local folder move");
+  const source = toLocalAbsolutePath(root, sourcePath);
+  const destination = toLocalAbsolutePath(root, entry.localPath || entry.path);
+  await fs.promises.mkdir(path.dirname(destination), { recursive: true });
+  await fs.promises.rename(source, destination);
+}
+
+async function renameRemoteFolder(drive, entry) {
+  await drive.files.update({
+    fileId: entry.fileId,
+    requestBody: { name: path.posix.basename(entry.remotePath || entry.path) },
+    fields: "id,name",
+  });
+}
+
 async function cleanupEmptyParentDirectories(root, relativePath) {
   let currentPath = path.dirname(toLocalAbsolutePath(root, relativePath));
   const resolvedRoot = path.resolve(root);
@@ -429,14 +462,41 @@ export async function executeStaged(drive, root, progress) {
   // Local deletes can run fully in parallel — no API rate limits.
   // Remote operations (download, upload, delete_remote) share a concurrency pool.
   const localDeletes = [];
+  const localMoves = [];
+  const remoteRenames = [];
   const remoteOps = [];
   const failedPaths = new Set();
 
   for (const [i, entry] of staged.entries()) {
     if (entry.action === "delete_local") {
       localDeletes.push({ index: i, entry });
+    } else if (entry.action === "move_local") {
+      localMoves.push({ index: i, entry });
+    } else if (entry.action === "rename_remote") {
+      remoteRenames.push({ index: i, entry });
     } else {
       remoteOps.push({ index: i, entry });
+    }
+  }
+
+  // Rename existing Drive folders before uploads into their new local paths.
+  for (const { entry } of remoteRenames) {
+    try {
+      await renameRemoteFolder(drive, entry);
+      result.foldersRenamed++;
+    } catch (err) {
+      failedPaths.add(entry.path);
+      result.errors.push(`rename_remote ${entry.path}: ${err.message}`);
+    }
+  }
+
+  // Moves must finish before any descendant remote operations use their new path.
+  for (const { entry } of localMoves) {
+    try {
+      await moveLocalFolder(entry, root);
+    } catch (err) {
+      failedPaths.add(entry.path);
+      result.errors.push(`move_local ${entry.path}: ${err.message}`);
     }
   }
 
@@ -508,6 +568,12 @@ export async function executeStaged(drive, root, progress) {
       } else if (action === "delete_remote") {
         const deleted = await deleteRemoteFile(drive, entry, snapshot, driveFolderId);
         if (deleted) result.deletedRemote++;
+      } else if (action === "push_pack") {
+        await pushPack(drive, root, entry.path);
+        result.packsPushed++;
+      } else if (action === "pull_pack") {
+        await pullPack(drive, root, entry.path);
+        result.packsPulled++;
       } else {
         throw new Error(`Unknown action '${action}'`);
       }
@@ -515,7 +581,7 @@ export async function executeStaged(drive, root, progress) {
     };
   });
 
-  let completed = localDeletes.length;
+  let completed = localDeletes.length + localMoves.length + remoteRenames.length;
   await runConcurrent(tasks, CONCURRENCY, (done, total, idx, err, entry) => {
     completed++;
     const op = remoteOps[idx];

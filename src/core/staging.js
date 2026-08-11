@@ -15,6 +15,10 @@ function changeToEntry(change) {
     entry.fileId = change.fileId;
   }
 
+  if (change.sourcePath) {
+    entry.sourcePath = change.sourcePath;
+  }
+
   if (change.remoteMeta?.path) {
     entry.remotePath = change.remoteMeta.path;
   }
@@ -94,6 +98,38 @@ export function stageRemoteFilesForDownload(root, remoteFiles) {
   index.staged = [...byPath.values()];
   writeIndex(root, index);
   return remoteFiles.length;
+}
+
+/**
+ * Stage a full remote hydration without losing deletions known from the
+ * snapshot diff. `pull --all` re-downloads every current remote item, but it
+ * must also preserve remote-deleted paths so committing the hydration cannot
+ * silently rebase them away.
+ */
+export function stageFullRemotePull(root, remoteFiles, remoteDeletions = []) {
+  const index = readIndex(root);
+  const byPath = new Map((index.staged || []).map((entry) => [entry.path, entry]));
+
+  for (const remoteFile of remoteFiles) {
+    byPath.set(remoteFile.path, {
+      action: "download",
+      path: remoteFile.path,
+      localPath: remoteFile.path,
+      fileId: remoteFile.id,
+      remotePath: remoteFile.path,
+      ...(remoteFile.mimeType ? { remoteMimeType: remoteFile.mimeType } : {}),
+      ...(remoteFile.md5Checksum ? { remoteMd5Checksum: remoteFile.md5Checksum } : {}),
+      ...(remoteFile.isFolder ? { isFolder: true } : {}),
+    });
+  }
+
+  for (const change of remoteDeletions) {
+    byPath.set(change.path, changeToEntry(change));
+  }
+
+  index.staged = [...byPath.values()];
+  writeIndex(root, index);
+  return remoteFiles.length + remoteDeletions.length;
 }
 
 export function unstagePath(root, targetPath) {

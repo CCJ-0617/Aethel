@@ -351,7 +351,20 @@ Use `aethel status --verbose` to show synced packs.
 Create `.aethelignore` (gitignore syntax) in your workspace root — or run `aethel init` to generate a default one.
 
 ```gitignore
-.venv/
+# Python virtual environments
+.venv
+.venv-*
+.venv_*
+venv
+venv-*
+venv_*
+env
+env-*
+env_*
+ENV
+ENV-*
+ENV_*
+uv-cache
 node_modules/
 __pycache__/
 .idea/

@@ -242,6 +242,54 @@ test("stageRemoteFilesForDownload stages full remote downloads", () => {
   }
 });
 
+test("stageFullRemotePull preserves remote deletions during a full hydration", () => {
+  const root = makeTmpWorkspace();
+  try {
+    const repo = new Repository(root);
+    const count = repo.stageFullRemotePull(
+      [
+        {
+          id: "keep-id",
+          path: "keep.txt",
+          mimeType: "text/plain",
+          md5Checksum: "keep-md5",
+        },
+      ],
+      [
+        {
+          path: "removed-folder",
+          suggestedAction: "delete_local",
+          fileId: "removed-id",
+          snapshotMeta: { path: "removed-folder", isFolder: true },
+        },
+      ]
+    );
+
+    assert.equal(count, 2);
+    assert.deepEqual(repo.getStagedEntries(), [
+      {
+        action: "download",
+        path: "keep.txt",
+        localPath: "keep.txt",
+        fileId: "keep-id",
+        remotePath: "keep.txt",
+        remoteMimeType: "text/plain",
+        remoteMd5Checksum: "keep-md5",
+      },
+      {
+        action: "delete_local",
+        path: "removed-folder",
+        localPath: "removed-folder",
+        fileId: "removed-id",
+        isFolder: true,
+        recursiveLocalDelete: true,
+      },
+    ]);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test("unstagePath removes a staged entry", () => {
   const root = makeTmpWorkspace();
   try {

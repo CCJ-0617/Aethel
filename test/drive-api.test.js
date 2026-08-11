@@ -478,7 +478,7 @@ test("getRemoteState walks only the configured Drive folder tree", async () => {
 
   assert.deepEqual(
     remoteState.files.map((item) => item.path).sort(),
-    ["docs/inside.txt", "empty", "root-child.txt"]
+    ["docs", "docs/inside.txt", "empty", "root-child.txt"]
   );
   assert.equal(
     drive.listQueries().some((query) => query === "trashed = false"),
@@ -504,7 +504,7 @@ test("getRemoteState uses global fetch for large configured folder snapshots", a
     estimatedRemoteFiles: 50_000,
   });
 
-  assert.deepEqual(remoteState.files.map((item) => item.path), ["docs/inside.txt"]);
+  assert.deepEqual(remoteState.files.map((item) => item.path).sort(), ["docs", "docs/inside.txt"]);
   assert.equal(
     drive.listQueries().some((query) => query === "trashed = false"),
     true
@@ -681,6 +681,43 @@ test("executeStaged downloads staged files without an extra metadata request", a
     assert.equal(metadataGets, 0);
     assert.equal(mediaGets, 1);
     assert.equal(await fs.readFile(path.join(workspaceRoot, "fast.txt"), "utf8"), "downloaded content");
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("executeStaged renames an existing remote folder without transferring its children", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aethel-folder-rename-"));
+
+  try {
+    initWorkspace(workspaceRoot, null, "My Drive");
+    writeIndex(workspaceRoot, {
+      staged: [{
+        action: "rename_remote",
+        path: "new-name",
+        localPath: "new-name",
+        sourcePath: "old-name",
+        fileId: "folder-1",
+        isFolder: true,
+      }],
+    });
+    const updates = [];
+    const result = await executeStaged({
+      files: {
+        async update(params) {
+          updates.push(params);
+          return { data: { id: params.fileId, name: params.requestBody.name } };
+        },
+      },
+    }, workspaceRoot);
+
+    assert.equal(result.foldersRenamed, 1);
+    assert.equal(result.errors.length, 0);
+    assert.deepEqual(updates, [{
+      fileId: "folder-1",
+      requestBody: { name: "new-name" },
+      fields: "id,name",
+    }]);
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }

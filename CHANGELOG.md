@@ -22,6 +22,14 @@
 
 ## Unreleased
 
+- Add packed-directory push and pull execution, including archive recovery
+  when a previously recorded Drive archive no longer exists.
+- Detect local and Drive folder renames so a sync moves or renames the folder
+  once rather than needlessly reprocessing its descendants.
+- Make `pull --all` retain remote-deletion operations while fully hydrating the
+  current Drive state.
+- Expand default ignore rules for common Python virtual-environment names and
+  `uv` caches.
 - Make `pull` fetch fresh Drive state by default so remote deletions are applied
   locally instead of being hidden by a stale remote cache.
 - Preserve folder metadata when staging remote-deleted folders for local

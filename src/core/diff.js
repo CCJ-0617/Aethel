@@ -6,9 +6,11 @@ export const ChangeType = Object.freeze({
   REMOTE_ADDED: "remote_added",
   REMOTE_MODIFIED: "remote_modified",
   REMOTE_DELETED: "remote_deleted",
+  REMOTE_RENAMED: "remote_renamed",
   LOCAL_ADDED: "local_added",
   LOCAL_MODIFIED: "local_modified",
   LOCAL_DELETED: "local_deleted",
+  LOCAL_RENAMED: "local_renamed",
   CONFLICT: "conflict",
   // Pack-specific change types
   PACK_LOCAL_MODIFIED: "pack_local_modified",
@@ -22,9 +24,11 @@ const SHORT_STATUS = {
   [ChangeType.REMOTE_ADDED]: "+R",
   [ChangeType.REMOTE_MODIFIED]: "MR",
   [ChangeType.REMOTE_DELETED]: "-R",
+  [ChangeType.REMOTE_RENAMED]: "RR",
   [ChangeType.LOCAL_ADDED]: "+L",
   [ChangeType.LOCAL_MODIFIED]: "ML",
   [ChangeType.LOCAL_DELETED]: "-L",
+  [ChangeType.LOCAL_RENAMED]: "LR",
   [ChangeType.CONFLICT]: "!!",
   [ChangeType.PACK_LOCAL_MODIFIED]: "PL",
   [ChangeType.PACK_REMOTE_MODIFIED]: "PR",
@@ -37,9 +41,11 @@ const DESCRIPTION = {
   [ChangeType.REMOTE_ADDED]: "new on Drive",
   [ChangeType.REMOTE_MODIFIED]: "modified on Drive",
   [ChangeType.REMOTE_DELETED]: "deleted on Drive",
+  [ChangeType.REMOTE_RENAMED]: "renamed on Drive",
   [ChangeType.LOCAL_ADDED]: "new locally",
   [ChangeType.LOCAL_MODIFIED]: "modified locally",
   [ChangeType.LOCAL_DELETED]: "deleted locally",
+  [ChangeType.LOCAL_RENAMED]: "renamed locally",
   [ChangeType.CONFLICT]: "both sides changed",
   [ChangeType.PACK_LOCAL_MODIFIED]: "pack changed locally",
   [ChangeType.PACK_REMOTE_MODIFIED]: "pack changed on Drive",
@@ -52,9 +58,11 @@ const SUGGESTED_ACTION = {
   [ChangeType.REMOTE_ADDED]: "download",
   [ChangeType.REMOTE_MODIFIED]: "download",
   [ChangeType.REMOTE_DELETED]: "delete_local",
+  [ChangeType.REMOTE_RENAMED]: "move_local",
   [ChangeType.LOCAL_ADDED]: "upload",
   [ChangeType.LOCAL_MODIFIED]: "upload",
   [ChangeType.LOCAL_DELETED]: "delete_remote",
+  [ChangeType.LOCAL_RENAMED]: "rename_remote",
   [ChangeType.CONFLICT]: "conflict",
   [ChangeType.PACK_LOCAL_MODIFIED]: "push_pack",
   [ChangeType.PACK_REMOTE_MODIFIED]: "pull_pack",
@@ -70,6 +78,7 @@ function createChange({
   remoteMeta = null,
   localMeta = null,
   snapshotMeta = null,
+  sourcePath = null,
 }) {
   return {
     changeType,
@@ -78,6 +87,7 @@ function createChange({
     remoteMeta,
     localMeta,
     snapshotMeta,
+    ...(sourcePath ? { sourcePath } : {}),
     shortStatus: SHORT_STATUS[changeType],
     description: DESCRIPTION[changeType],
     suggestedAction: SUGGESTED_ACTION[changeType],
@@ -481,6 +491,66 @@ function folderSnapshotMeta(pathValue, snapshotRemoteByPath) {
   };
 }
 
+function remapRenamedRemotePath(remotePath, renames) {
+  for (const rename of renames) {
+    if (remotePath === rename.to) return rename.from;
+    if (remotePath.startsWith(`${rename.to}/`)) {
+      return `${rename.from}${remotePath.slice(rename.to.length)}`;
+    }
+  }
+  return remotePath;
+}
+
+function inferFolderRenamesFromDescendants(snapshotFiles, remoteById, remoteFolderPaths, localFolderPaths) {
+  const candidates = new Map();
+
+  for (const [fileId, snapshotEntry] of Object.entries(snapshotFiles)) {
+    if (snapshotEntry.isFolder) continue;
+    const remoteEntry = remoteById.get(fileId);
+    const oldPath = entryPath(snapshotEntry);
+    const newPath = remoteEntry?.path;
+    if (!oldPath || !newPath || oldPath === newPath) continue;
+
+    const oldParts = oldPath.split("/");
+    const newParts = newPath.split("/");
+    let shared = 0;
+    while (shared < oldParts.length && shared < newParts.length && oldParts[shared] === newParts[shared]) {
+      shared++;
+    }
+    if (shared >= oldParts.length || shared >= newParts.length) continue;
+
+    const from = oldParts.slice(0, shared + 1).join("/");
+    const to = newParts.slice(0, shared + 1).join("/");
+    if (!remoteFolderPaths.has(to) || !localFolderPaths.has(from)) continue;
+    const key = `${from}\0${to}`;
+    candidates.set(key, { from, to, matches: (candidates.get(key)?.matches || 0) + 1 });
+  }
+
+  return [...candidates.values()]
+    .sort((left, right) => right.matches - left.matches || left.from.localeCompare(right.from))
+    .filter((candidate, index, all) =>
+      !all.slice(0, index).some((chosen) =>
+        candidate.from.startsWith(`${chosen.from}/`) || candidate.to.startsWith(`${chosen.to}/`)
+      )
+    );
+}
+
+function isRenamedDescendant(pathValue, renames) {
+  return renames.some((rename) =>
+    pathValue === rename.from || pathValue.startsWith(`${rename.from}/`)
+  );
+}
+
+function remapRenamedLocalPath(localPath, renames) {
+  for (const rename of renames) {
+    if (localPath === rename.to) return rename.from;
+    if (localPath.startsWith(`${rename.to}/`)) {
+      return `${rename.from}${localPath.slice(rename.to.length)}`;
+    }
+  }
+  return localPath;
+}
+
 export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIgnore = true } = {}) {
   const ignoreRules = root && respectIgnore ? loadIgnoreRules(root) : null;
 
@@ -516,15 +586,165 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   for (const [p, meta] of Object.entries(localFilesData)) {
     if (meta.isFolder) localFolderPaths.add(p);
   }
+  const remoteById = new Map(remoteFiles.map((file) => [file.id, file]));
+
+  // A folder keeps its Drive ID when renamed.  Recognize the top-level folder
+  // rename before comparing descendants by path, so its existing local tree is
+  // moved intact instead of being deleted and downloaded one file at a time.
+  const renamedFolders = [];
+  for (const remoteFile of remoteFiles
+    .filter((file) => file.isFolder && snapshotFiles[file.id])
+    .sort((left, right) => (snapshotFiles[left.id].path || "").split("/").length - (snapshotFiles[right.id].path || "").split("/").length)) {
+    const snapshotPath = entryPath(snapshotFiles[remoteFile.id]);
+    if (!snapshotPath || snapshotPath === remoteFile.path) continue;
+    if (remapRenamedRemotePath(remoteFile.path, renamedFolders) === snapshotPath) continue;
+    // Do not mask a local deletion: a missing local source still needs the
+    // normal download path to restore the renamed tree.
+    if (!localFolderPaths.has(snapshotPath)) continue;
+    renamedFolders.push({ from: snapshotPath, to: remoteFile.path, fileId: remoteFile.id });
+  }
+  const inferredRenamedFolders = inferFolderRenamesFromDescendants(
+    snapshotFiles,
+    remoteById,
+    remoteFolderPaths,
+    localFolderPaths
+  );
+  renamedFolders.push(...inferredRenamedFolders);
+
+  // Local folder renames do not retain a filesystem ID in the snapshot, so
+  // match an unmatched sibling folder by its unchanged tracked descendants.
+  // This intentionally handles renames (same parent), not arbitrary moves.
+  const locallyRenamedFolders = [];
+  const convergedRenamedFolders = [];
+  for (const [fileId, snapshotEntry] of Object.entries(snapshotFiles)) {
+    if (!snapshotEntry.isFolder) continue;
+    const from = entryPath(snapshotEntry);
+    if (!from || localFolderPaths.has(from)) continue;
+    const parent = from.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "";
+    const descendants = Object.entries(snapshotLocalFiles).filter(([candidate]) =>
+      candidate.startsWith(`${from}/`)
+    );
+    const candidates = [...localFolderPaths].filter((candidate) => {
+      const candidateParent = candidate.includes("/") ? candidate.slice(0, candidate.lastIndexOf("/")) : "";
+      if (candidateParent !== parent || snapshotRemoteByPath.has(candidate)) return false;
+      if (locallyRenamedFolders.some((rename) => candidate === rename.to)) return false;
+      return descendants.every(([oldPath, oldMeta]) => {
+        const mappedPath = `${candidate}${oldPath.slice(from.length)}`;
+        const current = localFilesData[mappedPath];
+        return current && (oldMeta.isFolder || oldMeta.md5 === current.md5);
+      });
+    });
+    if (candidates.length === 1) {
+      const to = candidates[0];
+      const remoteFolder = remoteById.get(fileId);
+      if (remoteFolder?.path === to) {
+        // Both sides made the same rename. There is no operation to perform,
+        // but descendants still need their paths remapped for comparison.
+        convergedRenamedFolders.push({ from, to, fileId, snapshotEntry });
+      } else if (remoteFolder?.path === from) {
+        locallyRenamedFolders.push({ from, to, fileId, snapshotEntry });
+      }
+    }
+  }
+  const remotePathRenames = [...renamedFolders, ...convergedRenamedFolders];
+  const localPathRenames = [...locallyRenamedFolders, ...convergedRenamedFolders];
 
   // Build remote lookup and detect additions/modifications in one pass
-  const remoteById = new Map();
   const remoteBaselinePathsHandledLocally = new Set();
+  for (const rename of inferredRenamedFolders) {
+    changes.push(
+      createChange({
+        changeType: ChangeType.REMOTE_RENAMED,
+        path: rename.to,
+        sourcePath: rename.from,
+        snapshotMeta: folderSnapshotMeta(rename.from, snapshotRemoteByPath),
+      })
+    );
+  }
   for (const remoteFile of remoteFiles) {
-    remoteById.set(remoteFile.id, remoteFile);
     const snapshotEntry = snapshotFiles[remoteFile.id];
 
+    if (inferredRenamedFolders.some((rename) => remoteFile.path === rename.to)) {
+      continue;
+    }
+
+    if (convergedRenamedFolders.some((rename) => rename.fileId === remoteFile.id)) {
+      continue;
+    }
+
+    const locallyRenamedFolder = locallyRenamedFolders.find((rename) => rename.fileId === remoteFile.id);
+    if (locallyRenamedFolder) {
+      changes.push(
+        createChange({
+          changeType: ChangeType.LOCAL_RENAMED,
+          path: locallyRenamedFolder.to,
+          sourcePath: locallyRenamedFolder.from,
+          fileId: remoteFile.id,
+          localMeta: { path: locallyRenamedFolder.to, isFolder: true },
+          snapshotMeta: snapshotEntry,
+        })
+      );
+      continue;
+    }
+
+    const renamedFolder = renamedFolders.find((rename) => rename.fileId === remoteFile.id);
+    if (renamedFolder) {
+      changes.push(
+        createChange({
+          changeType: ChangeType.REMOTE_RENAMED,
+          path: renamedFolder.to,
+          sourcePath: renamedFolder.from,
+          fileId: remoteFile.id,
+          remoteMeta: remoteFile,
+          snapshotMeta: snapshotEntry,
+        })
+      );
+      continue;
+    }
+
+    // A descendant has only moved because its ancestor was renamed. Its local
+    // counterpart will move together with that ancestor.
+    const remappedPath = remapRenamedRemotePath(remoteFile.path, remotePathRenames);
+    if (
+      snapshotEntry &&
+      remappedPath !== remoteFile.path &&
+      remappedPath === entryPath(snapshotEntry)
+    ) {
+      // The path change itself is covered by the folder move, but content
+      // changes made at the same time still need to be applied afterwards.
+      if (remoteChanged(snapshotEntry, remoteFile)) {
+        changes.push(
+          createChange({
+            changeType: ChangeType.REMOTE_MODIFIED,
+            path: remoteFile.path,
+            fileId: remoteFile.id,
+            remoteMeta: remoteFile,
+            snapshotMeta: snapshotEntry,
+          })
+        );
+      } else if (
+        !remoteFile.isFolder &&
+        !localFilesData[remappedPath] &&
+        !localFilesData[remoteFile.path]
+      ) {
+        changes.push(
+          createChange({
+            changeType: ChangeType.REMOTE_ADDED,
+            path: remoteFile.path,
+            fileId: remoteFile.id,
+            remoteMeta: remoteFile,
+            snapshotMeta: snapshotEntry,
+          })
+        );
+      }
+      continue;
+    }
+
     if (!snapshotEntry) {
+      const remappedPath = remapRenamedRemotePath(remoteFile.path, remotePathRenames);
+      if (remoteFile.isFolder && remappedPath !== remoteFile.path && localFolderPaths.has(remappedPath)) {
+        continue;
+      }
       const samePathSnapshot = snapshotRemoteByPath.get(remoteFile.path);
 
       if (samePathSnapshot) {
@@ -755,6 +975,13 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   }
 
   for (const [relativePath, localMeta] of Object.entries(localFilesData)) {
+    const remappedLocalPath = remapRenamedLocalPath(relativePath, localPathRenames);
+    if (
+      remappedLocalPath !== relativePath &&
+      Object.prototype.hasOwnProperty.call(snapshotLocalFiles, remappedLocalPath)
+    ) {
+      continue;
+    }
     if (remoteBaselinePathsHandledLocally.has(relativePath)) {
       continue;
     }
@@ -799,6 +1026,9 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   }
 
   for (const [relativePath, snapshotEntry] of Object.entries(snapshotLocalFiles)) {
+    if (isRenamedDescendant(relativePath, localPathRenames)) {
+      continue;
+    }
     if (!(relativePath in localFilesData)) {
       if (isUnderAnyFolder(relativePath, locallyDeletedFolders)) {
         continue;
