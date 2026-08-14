@@ -132,6 +132,25 @@ test("createPack creates a valid tar.gz archive", async () => {
   }
 });
 
+test("createPack uses isolated temporary archives for concurrent compression", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pack-test-"));
+
+  try {
+    const sourceA = await createTestDir(path.join(tempDir, "source-a"));
+    const sourceB = await createTestDir(path.join(tempDir, "source-b"));
+
+    const [first, second] = await Promise.all([
+      createPack(sourceA, path.join(tempDir, "archive-a")),
+      createPack(sourceB, path.join(tempDir, "archive-b")),
+    ]);
+
+    assert.ok(await fileExists(first.packPath));
+    assert.ok(await fileExists(second.packPath));
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("createPack creates uncompressed archive with Algorithm.NONE", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pack-test-"));
 

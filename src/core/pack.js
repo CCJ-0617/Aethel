@@ -18,6 +18,10 @@ import {
   resolveAlgorithm,
 } from "./compress.js";
 
+async function createTemporaryDirectory(prefix) {
+  return fsp.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
+}
+
 /**
  * Calculate tree hash for a directory using mtime + size.
  * This is the key optimization: ~30x faster than MD5 hashing all files.
@@ -110,7 +114,8 @@ export async function createPack(sourcePath, destPath, options = {}) {
   await countFiles(sourcePath);
 
   // Create tar archive with compression
-  const tempTarPath = path.join(os.tmpdir(), `aethel-tar-${Date.now()}.tar`);
+  const tempDir = await createTemporaryDirectory("aethel-tar");
+  const tempTarPath = path.join(tempDir, "archive.tar");
 
   try {
     // Create tar archive
@@ -154,6 +159,8 @@ export async function createPack(sourcePath, destPath, options = {}) {
       await fsp.unlink(packPath);
     } catch {}
     throw err;
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -170,7 +177,8 @@ export async function extractPack(packPath, destPath, options = {}) {
   // Ensure destination exists
   await fsp.mkdir(destPath, { recursive: true });
 
-  const tempTarPath = path.join(os.tmpdir(), `aethel-extract-${Date.now()}.tar`);
+  const tempDir = await createTemporaryDirectory("aethel-extract");
+  const tempTarPath = path.join(tempDir, "archive.tar");
 
   try {
     // Decompress if needed
@@ -223,6 +231,8 @@ export async function extractPack(packPath, destPath, options = {}) {
       await fsp.unlink(tempTarPath);
     } catch {}
     throw err;
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -260,7 +270,8 @@ export async function listPackContents(packPath) {
     });
   } else {
     // Need to decompress first
-    const tempTarPath = path.join(os.tmpdir(), `aethel-list-${Date.now()}.tar`);
+    const tempDir = await createTemporaryDirectory("aethel-list");
+    const tempTarPath = path.join(tempDir, "archive.tar");
     try {
       const readStream = fs.createReadStream(packPath);
       const writeStream = fs.createWriteStream(tempTarPath);
@@ -284,6 +295,8 @@ export async function listPackContents(packPath) {
         await fsp.unlink(tempTarPath);
       } catch {}
       throw err;
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -303,8 +316,7 @@ export async function extractSingleFile(packPath, filePath, destPath) {
   // Ensure destination directory exists
   await fsp.mkdir(path.dirname(destPath), { recursive: true });
 
-  const tempDir = path.join(os.tmpdir(), `aethel-single-${Date.now()}`);
-  await fsp.mkdir(tempDir, { recursive: true });
+  const tempDir = await createTemporaryDirectory("aethel-single");
 
   try {
     if (algorithm === Algorithm.NONE) {
