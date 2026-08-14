@@ -1,6 +1,6 @@
 # Aethel
 
-[![CI](https://github.com/CCJ-0617/Aethel/actions/workflows/ci.yml/badge.svg)](https://github.com/CCJ-0617/Aethel/actions/workflows/ci.yml)
+[![CI](https://github.com/Chaoos-404/Aethel/actions/workflows/ci.yml/badge.svg)](https://github.com/Chaoos-404/Aethel/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/aethel)](https://www.npmjs.com/package/aethel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen)](https://nodejs.org)
@@ -19,7 +19,7 @@ npm install -g aethel
 <summary>Install from source</summary>
 
 ```bash
-git clone https://github.com/CCJ-0617/Aethel.git
+git clone https://github.com/Chaoos-404/Aethel.git
 cd Aethel
 npm install
 npm run install:cli   # symlinks `aethel` into ~/.local/bin
