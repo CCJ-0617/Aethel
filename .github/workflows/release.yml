@@ -42,7 +42,7 @@ jobs:
         run: |
           node -e "
             const pkg = require('./package.json');
-            pkg.name = '@ccj-0617/aethel';
+            pkg.name = '@chaoos-404/aethel';
             pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
