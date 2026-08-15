@@ -102,6 +102,49 @@ test("computeDiff collapses a remote folder rename into one local move", () => {
   assert.equal(diff.changes[0].suggestedAction, "move_local");
 });
 
+test("computeDiff preserves separate remote parent and subfolder renames", () => {
+  const snapshot = {
+    files: {
+      parent: { id: "parent", path: "old-parent", isFolder: true },
+      child: { id: "child", path: "old-parent/old-child", isFolder: true },
+      leaf: { id: "leaf", path: "old-parent/old-child/leaf.txt", md5Checksum: "same" },
+    },
+    localFiles: {
+      "old-parent/old-child/leaf.txt": { md5: "same" },
+    },
+  };
+  const remoteFiles = [
+    { id: "parent", path: "new-parent", isFolder: true },
+    { id: "child", path: "new-parent/new-child", isFolder: true },
+    { id: "leaf", path: "new-parent/new-child/leaf.txt", md5Checksum: "same" },
+  ];
+  const localFiles = {
+    "old-parent/old-child/leaf.txt": { md5: "same" },
+  };
+
+  const diff = computeDiff(snapshot, remoteFiles, localFiles);
+
+  assert.deepEqual(
+    diff.changes.map(({ changeType, path, sourcePath }) => ({
+      changeType,
+      path,
+      sourcePath,
+    })),
+    [
+      {
+        changeType: ChangeType.REMOTE_RENAMED,
+        path: "new-parent",
+        sourcePath: "old-parent",
+      },
+      {
+        changeType: ChangeType.REMOTE_RENAMED,
+        path: "new-parent/new-child",
+        sourcePath: "old-parent/old-child",
+      },
+    ]
+  );
+});
+
 test("computeDiff collapses a local folder rename into one remote rename", () => {
   const snapshot = {
     files: {
@@ -128,6 +171,119 @@ test("computeDiff collapses a local folder rename into one remote rename", () =>
     { changeType: ChangeType.LOCAL_RENAMED, path: "new-name", sourcePath: "old-name" },
   ]);
   assert.equal(diff.changes[0].suggestedAction, "rename_remote");
+});
+
+test("computeDiff preserves separate local parent and subfolder renames", () => {
+  const snapshot = {
+    files: {
+      parent: { id: "parent", path: "old-parent", isFolder: true },
+      child: { id: "child", path: "old-parent/old-child", isFolder: true },
+      leaf: { id: "leaf", path: "old-parent/old-child/leaf.txt", md5Checksum: "same" },
+    },
+    localFiles: {
+      "old-parent/old-child/leaf.txt": { md5: "same" },
+    },
+  };
+  const remoteFiles = [
+    { id: "parent", path: "old-parent", isFolder: true },
+    { id: "child", path: "old-parent/old-child", isFolder: true },
+    { id: "leaf", path: "old-parent/old-child/leaf.txt", md5Checksum: "same" },
+  ];
+  const localFiles = {
+    "new-parent/new-child/leaf.txt": { md5: "same" },
+  };
+
+  const diff = computeDiff(snapshot, remoteFiles, localFiles);
+
+  assert.deepEqual(
+    diff.changes.map(({ changeType, path, sourcePath }) => ({
+      changeType,
+      path,
+      sourcePath,
+    })),
+    [
+      {
+        changeType: ChangeType.LOCAL_RENAMED,
+        path: "new-parent",
+        sourcePath: "old-parent",
+      },
+      {
+        changeType: ChangeType.LOCAL_RENAMED,
+        path: "new-parent/new-child",
+        sourcePath: "old-parent/old-child",
+      },
+    ]
+  );
+});
+
+test("computeDiff reports a local file rename and remote deletion as a conflict", () => {
+  const snapshot = {
+    files: {
+      file: {
+        id: "file",
+        path: "old-name.txt",
+        md5Checksum: "same",
+      },
+    },
+    localFiles: {
+      "old-name.txt": { md5: "same" },
+    },
+  };
+  const localFiles = {
+    "new-name.txt": { md5: "same" },
+  };
+
+  const diff = computeDiff(snapshot, [], localFiles);
+
+  assert.deepEqual(
+    diff.changes.map(({ changeType, path, sourcePath }) => ({
+      changeType,
+      path,
+      sourcePath,
+    })),
+    [
+      {
+        changeType: ChangeType.CONFLICT,
+        path: "new-name.txt",
+        sourcePath: "old-name.txt",
+      },
+    ]
+  );
+});
+
+test("computeDiff reports a remote file rename and local deletion as a conflict", () => {
+  const snapshot = {
+    files: {
+      file: {
+        id: "file",
+        path: "old-name.txt",
+        md5Checksum: "same",
+      },
+    },
+    localFiles: {
+      "old-name.txt": { md5: "same" },
+    },
+  };
+  const remoteFiles = [
+    { id: "file", path: "new-name.txt", md5Checksum: "same" },
+  ];
+
+  const diff = computeDiff(snapshot, remoteFiles, {});
+
+  assert.deepEqual(
+    diff.changes.map(({ changeType, path, sourcePath }) => ({
+      changeType,
+      path,
+      sourcePath,
+    })),
+    [
+      {
+        changeType: ChangeType.CONFLICT,
+        path: "new-name.txt",
+        sourcePath: "old-name.txt",
+      },
+    ]
+  );
 });
 
 test("computeDiff does not churn descendants when a folder rename already converged", () => {

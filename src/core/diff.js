@@ -251,6 +251,81 @@ function promoteConflicts(changes) {
   return filtered;
 }
 
+function promoteRenameDeleteConflicts(
+  changes,
+  snapshotFiles,
+  remoteFiles,
+  localFilesData
+) {
+  const remoteById = new Map(remoteFiles.map((file) => [file.id, file]));
+  const conflictChanges = [];
+  const handledPaths = new Set();
+
+  for (const [fileId, snapshotEntry] of Object.entries(snapshotFiles)) {
+    if (snapshotEntry.isFolder || !snapshotEntry.md5Checksum) continue;
+
+    const sourcePath = entryPath(snapshotEntry);
+    if (!sourcePath) continue;
+
+    const remoteEntry = remoteById.get(fileId);
+    const matchingLocalPaths = Object.entries(localFilesData)
+      .filter(
+        ([pathValue, localMeta]) =>
+          pathValue !== sourcePath &&
+          !localMeta.isFolder &&
+          localMeta.md5 === snapshotEntry.md5Checksum
+      )
+      .map(([pathValue]) => pathValue);
+
+    // Local rename and remote deletion are competing changes to the same
+    // tracked file. Do not silently restore either side.
+    if (!remoteEntry && matchingLocalPaths.length === 1) {
+      const pathValue = matchingLocalPaths[0];
+      handledPaths.add(sourcePath);
+      handledPaths.add(pathValue);
+      conflictChanges.push(
+        createChange({
+          changeType: ChangeType.CONFLICT,
+          path: pathValue,
+          sourcePath,
+          localMeta: localFilesData[pathValue],
+          snapshotMeta: snapshotEntry,
+        })
+      );
+      continue;
+    }
+
+    // Remote rename and local deletion are likewise ambiguous. A matching
+    // local file would indicate a local rename rather than deletion.
+    if (
+      remoteEntry &&
+      remoteEntry.path !== sourcePath &&
+      !localFilesData[sourcePath] &&
+      matchingLocalPaths.length === 0
+    ) {
+      handledPaths.add(sourcePath);
+      handledPaths.add(remoteEntry.path);
+      conflictChanges.push(
+        createChange({
+          changeType: ChangeType.CONFLICT,
+          path: remoteEntry.path,
+          sourcePath,
+          fileId,
+          remoteMeta: remoteEntry,
+          snapshotMeta: snapshotEntry,
+        })
+      );
+    }
+  }
+
+  if (conflictChanges.length === 0) return changes;
+
+  return [
+    ...changes.filter((change) => !handledPaths.has(change.path)),
+    ...conflictChanges,
+  ];
+}
+
 /**
  * Compute pack-level changes by comparing local packedDirs against manifest.
  * @param {string|null} root - Workspace root for loading manifest
@@ -492,7 +567,9 @@ function folderSnapshotMeta(pathValue, snapshotRemoteByPath) {
 }
 
 function remapRenamedRemotePath(remotePath, renames) {
-  for (const rename of renames) {
+  for (const rename of [...renames].sort(
+    (left, right) => right.to.split("/").length - left.to.split("/").length
+  )) {
     if (remotePath === rename.to) return rename.from;
     if (remotePath.startsWith(`${rename.to}/`)) {
       return `${rename.from}${remotePath.slice(rename.to.length)}`;
@@ -542,13 +619,47 @@ function isRenamedDescendant(pathValue, renames) {
 }
 
 function remapRenamedLocalPath(localPath, renames) {
-  for (const rename of renames) {
+  for (const rename of [...renames].sort(
+    (left, right) => right.to.split("/").length - left.to.split("/").length
+  )) {
     if (localPath === rename.to) return rename.from;
     if (localPath.startsWith(`${rename.to}/`)) {
       return `${rename.from}${localPath.slice(rename.to.length)}`;
     }
   }
   return localPath;
+}
+
+function applyLocalFolderRenames(snapshotPath, renames) {
+  for (const rename of [...renames].sort(
+    (left, right) => right.from.split("/").length - left.from.split("/").length
+  )) {
+    if (snapshotPath === rename.from) return rename.to;
+    if (snapshotPath.startsWith(`${rename.from}/`)) {
+      return `${rename.to}${snapshotPath.slice(rename.from.length)}`;
+    }
+  }
+  return snapshotPath;
+}
+
+function sameDescendantFileHashes(descendants, candidate, localFilesData) {
+  const snapshotHashes = descendants
+    .filter(([, meta]) => !meta.isFolder && meta.md5)
+    .map(([, meta]) => meta.md5)
+    .sort();
+  const candidateHashes = Object.entries(localFilesData)
+    .filter(
+      ([pathValue, meta]) =>
+        pathValue.startsWith(`${candidate}/`) && !meta.isFolder && meta.md5
+    )
+    .map(([, meta]) => meta.md5)
+    .sort();
+
+  return (
+    snapshotHashes.length > 0 &&
+    snapshotHashes.length === candidateHashes.length &&
+    snapshotHashes.every((hash, index) => hash === candidateHashes[index])
+  );
 }
 
 export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIgnore = true } = {}) {
@@ -616,11 +727,23 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   // This intentionally handles renames (same parent), not arbitrary moves.
   const locallyRenamedFolders = [];
   const convergedRenamedFolders = [];
-  for (const [fileId, snapshotEntry] of Object.entries(snapshotFiles)) {
-    if (!snapshotEntry.isFolder) continue;
+  const snapshotFolders = Object.entries(snapshotFiles)
+    .filter(([, snapshotEntry]) => snapshotEntry.isFolder)
+    .sort(
+      ([, left], [, right]) =>
+        entryPath(left).split("/").length - entryPath(right).split("/").length
+    );
+  for (const [fileId, snapshotEntry] of snapshotFolders) {
     const from = entryPath(snapshotEntry);
     if (!from || localFolderPaths.has(from)) continue;
-    const parent = from.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "";
+    const expectedCurrentPath = applyLocalFolderRenames(
+      from,
+      locallyRenamedFolders
+    );
+    const parent = expectedCurrentPath.includes("/")
+      ? expectedCurrentPath.slice(0, expectedCurrentPath.lastIndexOf("/"))
+      : "";
+    if (localFolderPaths.has(expectedCurrentPath)) continue;
     const descendants = Object.entries(snapshotLocalFiles).filter(([candidate]) =>
       candidate.startsWith(`${from}/`)
     );
@@ -628,11 +751,19 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
       const candidateParent = candidate.includes("/") ? candidate.slice(0, candidate.lastIndexOf("/")) : "";
       if (candidateParent !== parent || snapshotRemoteByPath.has(candidate)) return false;
       if (locallyRenamedFolders.some((rename) => candidate === rename.to)) return false;
-      return descendants.every(([oldPath, oldMeta]) => {
-        const mappedPath = `${candidate}${oldPath.slice(from.length)}`;
+      const exactDescendantMatch = descendants.every(([oldPath, oldMeta]) => {
+        const expectedOldPath = applyLocalFolderRenames(
+          oldPath,
+          locallyRenamedFolders
+        );
+        const mappedPath = `${candidate}${expectedOldPath.slice(expectedCurrentPath.length)}`;
         const current = localFilesData[mappedPath];
         return current && (oldMeta.isFolder || oldMeta.md5 === current.md5);
       });
+      return (
+        exactDescendantMatch ||
+        sameDescendantFileHashes(descendants, candidate, localFilesData)
+      );
     });
     if (candidates.length === 1) {
       const to = candidates[0];
@@ -832,6 +963,22 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
           snapshotMeta: snapshotEntry,
         })
       );
+      continue;
+    }
+
+    // Non-empty folders are not recorded in the local snapshot. When an
+    // ancestor was renamed locally, their unchanged remote descendants now
+    // live under the remapped local path and must not be mistaken for local
+    // deletions.
+    const remappedLocalFolderPath = applyLocalFolderRenames(
+      remoteFile.path,
+      localPathRenames
+    );
+    if (
+      remoteFile.isFolder &&
+      remappedLocalFolderPath !== remoteFile.path &&
+      localFolderPaths.has(remappedLocalFolderPath)
+    ) {
       continue;
     }
 
@@ -1061,5 +1208,10 @@ export function computeDiff(snapshot, remoteFiles, localFiles, { root, respectIg
   // Compute pack changes
   const packChanges = computePackChanges(root, packedDirs, snapshot);
 
-  return buildDiffResult(promoteConflicts(changes), packChanges);
+  return buildDiffResult(
+    promoteConflicts(
+      promoteRenameDeleteConflicts(changes, snapshotFiles, remoteFiles, localFilesData)
+    ),
+    packChanges
+  );
 }

@@ -23,6 +23,12 @@ const LIVE_FOLDER_NAME =
   "aethel-codex-remote-delete-test-20260620-222314";
 const LIVE_RUN_FOLDER_NAME =
   process.env.AETHEL_LIVE_DRIVE_RUN_FOLDER || "codex-live-sync-matrix";
+const NESTED_RENAME_RUN_FOLDER_NAME =
+  process.env.AETHEL_LIVE_DRIVE_NESTED_RENAME_RUN_FOLDER ||
+  `${LIVE_RUN_FOLDER_NAME}-nested-renames`;
+const RENAME_DELETE_RUN_FOLDER_NAME =
+  process.env.AETHEL_LIVE_DRIVE_RENAME_DELETE_RUN_FOLDER ||
+  `${LIVE_RUN_FOLDER_NAME}-rename-delete-conflicts`;
 const LIVE_TEST_ENABLED = process.env.AETHEL_LIVE_DRIVE_TEST === "1";
 
 const KNOWN_TEST_NAMES = new Set([
@@ -44,6 +50,22 @@ const KNOWN_TEST_NAMES = new Set([
   "remote-rename-dir-new",
 ]);
 
+const NESTED_RENAME_TEST_NAMES = new Set([
+  "remote-parent-old",
+  "remote-parent-new",
+  "remote-subtree",
+  "local-parent-old",
+  "local-parent-new",
+  "local-subtree",
+]);
+
+const RENAME_DELETE_TEST_NAMES = new Set([
+  "local-rename-remote-delete-old.txt",
+  "local-rename-remote-delete-new.txt",
+  "remote-rename-local-delete-old.txt",
+  "remote-rename-local-delete-new.txt",
+]);
+
 async function listDirectChildren(drive, parentId) {
   const files = [];
   let pageToken = null;
@@ -62,9 +84,9 @@ async function listDirectChildren(drive, parentId) {
   return files;
 }
 
-async function resetKnownChildren(drive, folderId) {
+async function resetKnownChildren(drive, folderId, knownTestNames = KNOWN_TEST_NAMES) {
   const children = await listDirectChildren(drive, folderId);
-  const unexpected = children.filter((item) => !KNOWN_TEST_NAMES.has(item.name));
+  const unexpected = children.filter((item) => !knownTestNames.has(item.name));
   assert.deepEqual(
     unexpected.map((item) => item.name).sort(),
     [],
@@ -277,7 +299,9 @@ test(
         ),
       ]);
 
-      const remote = await getRemoteState(drive, folderId);
+      const remote = await getRemoteState(drive, folderId, null, {
+        refreshRemoteMemo: true,
+      });
       const local = await scanLocal(workspaceRoot);
       const diff = computeDiff(baselineSnapshot, remote.files, local, {
         root: workspaceRoot,
@@ -296,20 +320,19 @@ test(
         "remote-added-file.txt": "download",
         "remote-delete-dir": "delete_local",
         "remote-delete-file.txt": "delete_local",
-        "remote-rename-dir-new": "download",
-        "remote-rename-dir-old": "delete_local",
+        "remote-rename-dir-new": "move_local",
         "remote-rename-file-new.txt": "download",
         "remote-rename-file-old.txt": "delete_local",
       });
 
-      assert.equal(stageChanges(workspaceRoot, diff.changes), 16);
+      assert.equal(stageChanges(workspaceRoot, diff.changes), 15);
 
       const result = await executeStaged(drive, workspaceRoot);
       assert.deepEqual(result.errors, []);
       assert.equal(result.downloaded, 2);
       assert.equal(result.uploaded, 2);
-      assert.equal(result.foldersCreated, 4);
-      assert.equal(result.deletedLocal, 4);
+      assert.equal(result.foldersCreated, 3);
+      assert.equal(result.deletedLocal, 3);
       assert.equal(result.deletedRemote, 4);
       assert.equal(readIndex(workspaceRoot).staged.length, 0);
 
@@ -343,7 +366,9 @@ test(
       await fs.stat(path.join(workspaceRoot, "remote-added-dir"));
       await fs.stat(path.join(workspaceRoot, "remote-rename-dir-new"));
 
-      const finalRemote = await getRemoteState(drive, folderId);
+      const finalRemote = await getRemoteState(drive, folderId, null, {
+        refreshRemoteMemo: true,
+      });
       assert.deepEqual(
         finalRemote.files.map((item) => item.path).sort(),
         [
@@ -368,6 +393,344 @@ test(
       );
     } finally {
       await fs.rm(workspaceRoot, { recursive: true, force: true });
+      await resetKnownChildren(drive, folderId);
+    }
+  }
+);
+
+test(
+  "live Google Drive sync preserves nested trees during parent and subfolder renames",
+  {
+    skip: LIVE_TEST_ENABLED
+      ? false
+      : "Set AETHEL_LIVE_DRIVE_TEST=1 to run against real Google Drive",
+    concurrency: false,
+  },
+  async () => {
+    resetFolderLookupCache();
+
+    const drive = withDriveRetry(await authenticate());
+    const parentFolderId = await ensureFolder(drive, LIVE_FOLDER_NAME, null);
+    const folderId = await ensureFolder(
+      drive,
+      NESTED_RENAME_RUN_FOLDER_NAME,
+      parentFolderId
+    );
+    await resetKnownChildren(drive, folderId, NESTED_RENAME_TEST_NAMES);
+
+    const workspaceRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "aethel-live-drive-nested-renames-")
+    );
+
+    try {
+      initWorkspace(
+        workspaceRoot,
+        folderId,
+        `${LIVE_FOLDER_NAME}/${NESTED_RENAME_RUN_FOLDER_NAME}`
+      );
+
+      const remoteParentOld = await createRemoteFolder(
+        drive,
+        folderId,
+        "remote-parent-old"
+      );
+      const remoteParentChild = await createRemoteFolder(
+        drive,
+        remoteParentOld.id,
+        "child-old"
+      );
+      const remoteParentGrandchild = await createRemoteFolder(
+        drive,
+        remoteParentChild.id,
+        "grandchild"
+      );
+      await createRemoteFile(
+        drive,
+        remoteParentGrandchild.id,
+        "leaf.txt",
+        "remote parent rename baseline\n"
+      );
+
+      const remoteSubtree = await createRemoteFolder(
+        drive,
+        folderId,
+        "remote-subtree"
+      );
+      const remoteSubfolderOld = await createRemoteFolder(
+        drive,
+        remoteSubtree.id,
+        "child-old"
+      );
+      const remoteSubfolderGrandchild = await createRemoteFolder(
+        drive,
+        remoteSubfolderOld.id,
+        "grandchild"
+      );
+      await createRemoteFile(
+        drive,
+        remoteSubfolderGrandchild.id,
+        "leaf.txt",
+        "remote subfolder rename baseline\n"
+      );
+
+      const localParentOld = await createRemoteFolder(
+        drive,
+        folderId,
+        "local-parent-old"
+      );
+      const localParentChild = await createRemoteFolder(
+        drive,
+        localParentOld.id,
+        "child-old"
+      );
+      const localParentGrandchild = await createRemoteFolder(
+        drive,
+        localParentChild.id,
+        "grandchild"
+      );
+      await createRemoteFile(
+        drive,
+        localParentGrandchild.id,
+        "leaf.txt",
+        "local parent rename baseline\n"
+      );
+
+      const localSubtree = await createRemoteFolder(
+        drive,
+        folderId,
+        "local-subtree"
+      );
+      const localSubfolderOld = await createRemoteFolder(
+        drive,
+        localSubtree.id,
+        "child-old"
+      );
+      const localSubfolderGrandchild = await createRemoteFolder(
+        drive,
+        localSubfolderOld.id,
+        "grandchild"
+      );
+      await createRemoteFile(
+        drive,
+        localSubfolderGrandchild.id,
+        "leaf.txt",
+        "local subfolder rename baseline\n"
+      );
+
+      await writeLocalFile(
+        workspaceRoot,
+        "remote-parent-old/child-old/grandchild/leaf.txt",
+        "remote parent rename baseline\n"
+      );
+      await writeLocalFile(
+        workspaceRoot,
+        "remote-subtree/child-old/grandchild/leaf.txt",
+        "remote subfolder rename baseline\n"
+      );
+      await writeLocalFile(
+        workspaceRoot,
+        "local-parent-old/child-old/grandchild/leaf.txt",
+        "local parent rename baseline\n"
+      );
+      await writeLocalFile(
+        workspaceRoot,
+        "local-subtree/child-old/grandchild/leaf.txt",
+        "local subfolder rename baseline\n"
+      );
+
+      const baselineRemote = await getRemoteState(drive, folderId);
+      const baselineLocal = await scanLocal(workspaceRoot);
+      const baselineSnapshot = buildSnapshot(
+        baselineRemote.files,
+        baselineLocal,
+        "live Google Drive nested rename baseline"
+      );
+      writeSnapshot(workspaceRoot, baselineSnapshot);
+
+      await drive.files.update({
+        fileId: remoteParentOld.id,
+        requestBody: { name: "remote-parent-new" },
+        fields: "id,name",
+      });
+      await drive.files.update({
+        fileId: remoteParentChild.id,
+        requestBody: { name: "child-new" },
+        fields: "id,name",
+      });
+      await drive.files.update({
+        fileId: remoteSubfolderOld.id,
+        requestBody: { name: "child-new" },
+        fields: "id,name",
+      });
+      await fs.rename(
+        path.join(workspaceRoot, "local-parent-old"),
+        path.join(workspaceRoot, "local-parent-new")
+      );
+      await fs.rename(
+        path.join(workspaceRoot, "local-parent-new", "child-old"),
+        path.join(workspaceRoot, "local-parent-new", "child-new")
+      );
+      await fs.rename(
+        path.join(workspaceRoot, "local-subtree", "child-old"),
+        path.join(workspaceRoot, "local-subtree", "child-new")
+      );
+
+      const remote = await getRemoteState(drive, folderId, null, {
+        refreshRemoteMemo: true,
+      });
+      const local = await scanLocal(workspaceRoot);
+      const diff = computeDiff(baselineSnapshot, remote.files, local, {
+        root: workspaceRoot,
+      });
+
+      assert.deepEqual(changeActions(diff), {
+        "local-parent-new": "rename_remote",
+        "local-parent-new/child-new": "rename_remote",
+        "local-subtree/child-new": "rename_remote",
+        "remote-parent-new": "move_local",
+        "remote-parent-new/child-new": "move_local",
+        "remote-subtree/child-new": "move_local",
+      });
+      assert.equal(stageChanges(workspaceRoot, diff.changes), 6);
+
+      const result = await executeStaged(drive, workspaceRoot);
+      assert.deepEqual(result.errors, []);
+      assert.equal(result.foldersRenamed, 3);
+      assert.equal(readIndex(workspaceRoot).staged.length, 0);
+
+      const expectedLocalFiles = [
+        "local-parent-new/child-new/grandchild/leaf.txt",
+        "local-subtree/child-new/grandchild/leaf.txt",
+        "remote-parent-new/child-new/grandchild/leaf.txt",
+        "remote-subtree/child-new/grandchild/leaf.txt",
+      ];
+      for (const relativePath of expectedLocalFiles) {
+        await fs.stat(path.join(workspaceRoot, relativePath));
+      }
+      await assert.rejects(
+        fs.stat(path.join(workspaceRoot, "remote-parent-old")),
+        { code: "ENOENT" }
+      );
+      await assert.rejects(
+        fs.stat(path.join(workspaceRoot, "remote-subtree", "child-old")),
+        { code: "ENOENT" }
+      );
+
+      const finalRemote = await getRemoteState(drive, folderId, null, {
+        refreshRemoteMemo: true,
+      });
+      const remotePaths = new Set(finalRemote.files.map((item) => item.path));
+      for (const relativePath of expectedLocalFiles) {
+        assert.equal(remotePaths.has(relativePath), true, relativePath);
+      }
+      assert.equal(remotePaths.has("remote-parent-old"), false);
+      assert.equal(remotePaths.has("remote-parent-new/child-old"), false);
+      assert.equal(remotePaths.has("remote-subtree/child-old"), false);
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+      await resetKnownChildren(drive, folderId, NESTED_RENAME_TEST_NAMES);
+    }
+  }
+);
+
+test(
+  "live Google Drive sync reports file rename versus deletion conflicts",
+  {
+    skip: LIVE_TEST_ENABLED
+      ? false
+      : "Set AETHEL_LIVE_DRIVE_TEST=1 to run against real Google Drive",
+  },
+  async () => {
+    resetFolderLookupCache();
+
+    const drive = withDriveRetry(await authenticate());
+    const parentFolderId = await ensureFolder(drive, LIVE_FOLDER_NAME, null);
+    const folderId = await ensureFolder(
+      drive,
+      RENAME_DELETE_RUN_FOLDER_NAME,
+      parentFolderId
+    );
+    await resetKnownChildren(drive, folderId, RENAME_DELETE_TEST_NAMES);
+
+    const workspaceRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "aethel-live-drive-rename-delete-")
+    );
+
+    try {
+      initWorkspace(
+        workspaceRoot,
+        folderId,
+        `${LIVE_FOLDER_NAME}/${RENAME_DELETE_RUN_FOLDER_NAME}`
+      );
+
+      const remoteDeleteFile = await createRemoteFile(
+        drive,
+        folderId,
+        "local-rename-remote-delete-old.txt",
+        "local rename, remote deletion baseline\n"
+      );
+      const remoteRenameFile = await createRemoteFile(
+        drive,
+        folderId,
+        "remote-rename-local-delete-old.txt",
+        "remote rename, local deletion baseline\n"
+      );
+      await writeLocalFile(
+        workspaceRoot,
+        "local-rename-remote-delete-old.txt",
+        "local rename, remote deletion baseline\n"
+      );
+      await writeLocalFile(
+        workspaceRoot,
+        "remote-rename-local-delete-old.txt",
+        "remote rename, local deletion baseline\n"
+      );
+
+      const baselineRemote = await getRemoteState(drive, folderId);
+      const baselineLocal = await scanLocal(workspaceRoot);
+      const baselineSnapshot = buildSnapshot(
+        baselineRemote.files,
+        baselineLocal,
+        "live Google Drive rename/delete conflict baseline"
+      );
+      writeSnapshot(workspaceRoot, baselineSnapshot);
+
+      await drive.files.update({
+        fileId: remoteDeleteFile.id,
+        requestBody: { trashed: true },
+        fields: "id,trashed",
+      });
+      await drive.files.update({
+        fileId: remoteRenameFile.id,
+        requestBody: { name: "remote-rename-local-delete-new.txt" },
+        fields: "id,name",
+      });
+      await fs.rename(
+        path.join(workspaceRoot, "local-rename-remote-delete-old.txt"),
+        path.join(workspaceRoot, "local-rename-remote-delete-new.txt")
+      );
+      await fs.rm(
+        path.join(workspaceRoot, "remote-rename-local-delete-old.txt")
+      );
+
+      const remote = await getRemoteState(drive, folderId, null, {
+        refreshRemoteMemo: true,
+      });
+      const local = await scanLocal(workspaceRoot);
+      const diff = computeDiff(baselineSnapshot, remote.files, local, {
+        root: workspaceRoot,
+      });
+
+      assert.deepEqual(changeActions(diff), {
+        "local-rename-remote-delete-new.txt": "conflict",
+        "remote-rename-local-delete-new.txt": "conflict",
+      });
+      assert.equal(diff.conflicts.length, 2);
+      assert.equal(stageChanges(workspaceRoot, diff.changes), 2);
+      assert.equal(readIndex(workspaceRoot).staged.length, 2);
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+      await resetKnownChildren(drive, folderId, RENAME_DELETE_TEST_NAMES);
     }
   }
 );

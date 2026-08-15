@@ -333,6 +333,41 @@ async function moveLocalFolder(entry, root) {
   await fs.promises.rename(source, destination);
 }
 
+function localMoveDestinationBeforeAncestorMoves(entry, localMoves) {
+  const sourcePath = entry.sourcePath;
+  let destinationPath = entry.localPath || entry.path;
+
+  if (!sourcePath) {
+    return destinationPath;
+  }
+
+  const ancestorMoves = localMoves
+    .map(({ entry: candidate }) => candidate)
+    .filter(
+      (candidate) =>
+        candidate.sourcePath &&
+        sourcePath.startsWith(`${candidate.sourcePath}/`)
+    )
+    .sort(
+      (left, right) =>
+        (right.localPath || right.path).split("/").length -
+        (left.localPath || left.path).split("/").length
+    );
+
+  for (const ancestor of ancestorMoves) {
+    const ancestorDestination = ancestor.localPath || ancestor.path;
+    if (destinationPath === ancestorDestination) {
+      destinationPath = ancestor.sourcePath;
+    } else if (destinationPath.startsWith(`${ancestorDestination}/`)) {
+      destinationPath = `${ancestor.sourcePath}${destinationPath.slice(
+        ancestorDestination.length
+      )}`;
+    }
+  }
+
+  return destinationPath;
+}
+
 async function renameRemoteFolder(drive, entry) {
   await drive.files.update({
     fileId: entry.fileId,
@@ -491,9 +526,22 @@ export async function executeStaged(drive, root, progress) {
   }
 
   // Moves must finish before any descendant remote operations use their new path.
+  // Nested folder renames must move the deepest directory first: after an
+  // ancestor moves, its old descendant source path no longer exists.
+  localMoves.sort(
+    (left, right) =>
+      (right.entry.sourcePath || right.entry.path).split("/").length -
+      (left.entry.sourcePath || left.entry.path).split("/").length
+  );
   for (const { entry } of localMoves) {
     try {
-      await moveLocalFolder(entry, root);
+      await moveLocalFolder(
+        {
+          ...entry,
+          localPath: localMoveDestinationBeforeAncestorMoves(entry, localMoves),
+        },
+        root
+      );
     } catch (err) {
       failedPaths.add(entry.path);
       result.errors.push(`move_local ${entry.path}: ${err.message}`);
