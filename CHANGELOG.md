@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.13 (2026-08-16)
+
+- Preserve local-only files and local modifications during pull
+
 ## 1.3.13-beta.0 (2026-08-16)
 
 - Preserve local-only files and local modifications when pulling remote changes.
