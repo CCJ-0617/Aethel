@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.12 (2026-08-16)
+
+- Fix remote folder rename pulls
+
 ## 1.3.9 (2026-06-21)
 
 - Fix TUI refresh behavior so local edits, renames, and deletes show up without
