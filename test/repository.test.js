@@ -290,6 +290,63 @@ test("stageFullRemotePull preserves remote deletions during a full hydration", (
   }
 });
 
+test("stageFullRemotePull preserves remote folder renames during a full hydration", () => {
+  const root = makeTmpWorkspace();
+  try {
+    const repo = new Repository(root);
+    const count = repo.stageFullRemotePull(
+      [
+        {
+          id: "renamed-folder-id",
+          path: "new-folder",
+          isFolder: true,
+        },
+        {
+          id: "child-id",
+          path: "new-folder/notes.txt",
+          mimeType: "text/plain",
+          md5Checksum: "notes-md5",
+        },
+      ],
+      [],
+      [
+        {
+          path: "new-folder",
+          sourcePath: "old-folder",
+          suggestedAction: "move_local",
+          fileId: "renamed-folder-id",
+          remoteMeta: { path: "new-folder", isFolder: true },
+          snapshotMeta: { path: "old-folder", isFolder: true },
+        },
+      ]
+    );
+
+    assert.equal(count, 3);
+    assert.deepEqual(repo.getStagedEntries(), [
+      {
+        action: "move_local",
+        path: "new-folder",
+        localPath: "new-folder",
+        fileId: "renamed-folder-id",
+        sourcePath: "old-folder",
+        remotePath: "new-folder",
+        isFolder: true,
+      },
+      {
+        action: "download",
+        path: "new-folder/notes.txt",
+        localPath: "new-folder/notes.txt",
+        fileId: "child-id",
+        remotePath: "new-folder/notes.txt",
+        remoteMimeType: "text/plain",
+        remoteMd5Checksum: "notes-md5",
+      },
+    ]);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test("unstagePath removes a staged entry", () => {
   const root = makeTmpWorkspace();
   try {

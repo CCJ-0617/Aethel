@@ -201,8 +201,8 @@ export class Repository {
     return stageRemoteFilesForDownload(this._root, remoteFiles);
   }
 
-  stageFullRemotePull(remoteFiles, remoteDeletions) {
-    return stageFullRemotePull(this._root, remoteFiles, remoteDeletions);
+  stageFullRemotePull(remoteFiles, remoteDeletions, remoteRenames) {
+    return stageFullRemotePull(this._root, remoteFiles, remoteDeletions, remoteRenames);
   }
 
   unstagePath(targetPath) {

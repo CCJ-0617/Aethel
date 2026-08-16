@@ -103,10 +103,15 @@ export function stageRemoteFilesForDownload(root, remoteFiles) {
 /**
  * Stage a full remote hydration without losing deletions known from the
  * snapshot diff. `pull --all` re-downloads every current remote item, but it
- * must also preserve remote-deleted paths so committing the hydration cannot
- * silently rebase them away.
+ * must also preserve remote-deleted and renamed paths so committing the
+ * hydration cannot silently rebase them away.
  */
-export function stageFullRemotePull(root, remoteFiles, remoteDeletions = []) {
+export function stageFullRemotePull(
+  root,
+  remoteFiles,
+  remoteDeletions = [],
+  remoteRenames = []
+) {
   const index = readIndex(root);
   const byPath = new Map((index.staged || []).map((entry) => [entry.path, entry]));
 
@@ -127,9 +132,16 @@ export function stageFullRemotePull(root, remoteFiles, remoteDeletions = []) {
     byPath.set(change.path, changeToEntry(change));
   }
 
+  // A renamed folder shares its destination with a full-download folder
+  // entry. Keep the move so the existing local tree is relocated before any
+  // descendant downloads run, rather than leaving the old directory stale.
+  for (const change of remoteRenames) {
+    byPath.set(change.path, changeToEntry(change));
+  }
+
   index.staged = [...byPath.values()];
   writeIndex(root, index);
-  return remoteFiles.length + remoteDeletions.length;
+  return remoteFiles.length + remoteDeletions.length + remoteRenames.length;
 }
 
 export function unstagePath(root, targetPath) {

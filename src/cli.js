@@ -1020,6 +1020,9 @@ async function handlePull(paths, options) {
     let remoteDeletions = diff.changes.filter(
       (change) => change.changeType === ChangeType.REMOTE_DELETED
     );
+    let remoteRenames = diff.changes.filter(
+      (change) => change.changeType === ChangeType.REMOTE_RENAMED
+    );
 
     if (paths && paths.length > 0) {
       remoteFiles = remoteFiles.filter((file) =>
@@ -1028,9 +1031,12 @@ async function handlePull(paths, options) {
       remoteDeletions = remoteDeletions.filter((change) =>
         paths.some((p) => matchesPattern(change.path, p))
       );
+      remoteRenames = remoteRenames.filter((change) =>
+        paths.some((p) => matchesPattern(change.path, p))
+      );
     }
 
-    if (!remoteFiles.length && !remoteDeletions.length) {
+    if (!remoteFiles.length && !remoteDeletions.length && !remoteRenames.length) {
       console.log("No remote changes matched.");
       return;
     }
@@ -1038,7 +1044,8 @@ async function handlePull(paths, options) {
     if (options.dryRun) {
       console.log(
         `Would pull ${remoteFiles.length} remote item(s) and apply ` +
-        `${remoteDeletions.length} remote deletion(s):`
+        `${remoteDeletions.length} remote deletion(s) and ` +
+        `${remoteRenames.length} remote rename(s):`
       );
       for (const file of remoteFiles) {
         console.log(`  +R ${file.path}  (full remote download)`);
@@ -1046,10 +1053,13 @@ async function handlePull(paths, options) {
       for (const change of remoteDeletions) {
         console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
       }
+      for (const change of remoteRenames) {
+        console.log(`  ${change.shortStatus} ${change.path}  (${change.description})`);
+      }
       return;
     }
 
-    const count = repo.stageFullRemotePull(remoteFiles, remoteDeletions);
+    const count = repo.stageFullRemotePull(remoteFiles, remoteDeletions, remoteRenames);
     console.log(`Staged ${count} remote change(s). Committing...`);
     await handleCommit({ ...options, message: options.message || "pull" }, {
       repo,
@@ -1063,6 +1073,7 @@ async function handlePull(paths, options) {
       ChangeType.REMOTE_ADDED,
       ChangeType.REMOTE_MODIFIED,
       ChangeType.REMOTE_DELETED,
+      ChangeType.REMOTE_RENAMED,
     ].includes(change.changeType)
   );
   let forcedPullConflictChanges = [];
