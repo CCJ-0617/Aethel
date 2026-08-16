@@ -1063,7 +1063,18 @@ async function handlePull(paths, options) {
     console.log(`Staged ${count} remote change(s). Committing...`);
     await handleCommit({ ...options, message: options.message || "pull" }, {
       repo,
-      snapshotHint: { remote: remoteState },
+      snapshotHint: {
+        remote: remoteState,
+        pullChanges: [
+          ...remoteFiles.map((remoteFile) => ({
+            suggestedAction: "download",
+            path: remoteFile.path,
+            remoteMeta: remoteFile,
+          })),
+          ...remoteDeletions,
+          ...remoteRenames,
+        ],
+      },
     });
     return;
   }
@@ -1136,7 +1147,7 @@ async function handlePull(paths, options) {
   // Pull downloads remote→local: remote state unchanged, only re-scan local
   await handleCommit({ ...options, message: options.message || "pull" }, {
     repo,
-    snapshotHint: { remote: remoteState },
+    snapshotHint: { remote: remoteState, pullChanges: remoteChanges },
   });
 }
 

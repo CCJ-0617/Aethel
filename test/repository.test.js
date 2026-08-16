@@ -4,7 +4,8 @@ import os from "node:os";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Repository } from "../src/core/repository.js";
-import { initWorkspace } from "../src/core/config.js";
+import { initWorkspace, writeSnapshot } from "../src/core/config.js";
+import { computeDiff, ChangeType } from "../src/core/diff.js";
 import { writeRemoteCache } from "../src/core/remote-cache.js";
 import { conflictResolutionChange } from "../src/core/staging.js";
 
@@ -483,6 +484,85 @@ test("commitStaged does not save a snapshot when sync has errors", async () => {
     assert.equal(result.errors.length, 1);
     assert.equal(repo.getSnapshot(), null);
     assert.equal(repo.getStagedEntries().length, 1);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("pull snapshots retain local-only additions and local modifications", async () => {
+  const root = makeTmpWorkspace();
+  try {
+    const repo = new Repository(root);
+    fs.writeFileSync(path.join(root, "synced.txt"), "base");
+    const baselineLocal = await repo.scanLocal();
+    const baseMd5 = baselineLocal.files["synced.txt"].md5;
+    writeSnapshot(root, {
+      timestamp: "2026-08-16T00:00:00.000Z",
+      message: "baseline",
+      files: {
+        synced: {
+          id: "synced",
+          path: "synced.txt",
+          localPath: "synced.txt",
+          md5Checksum: baseMd5,
+        },
+      },
+      localFiles: baselineLocal.files,
+    });
+
+    // These local edits exist before the pull and must not become synced just
+    // because another Drive file is downloaded.
+    fs.writeFileSync(path.join(root, "synced.txt"), "local edit");
+    fs.writeFileSync(path.join(root, "local-only.txt"), "local only");
+    fs.writeFileSync(path.join(root, "remote-only.txt"), "remote only");
+    const afterPullLocal = await repo.scanLocal();
+    const remoteState = {
+      files: [
+        {
+          id: "synced",
+          name: "synced.txt",
+          path: "synced.txt",
+          mimeType: "text/plain",
+          md5Checksum: baseMd5,
+        },
+        {
+          id: "remote-only",
+          name: "remote-only.txt",
+          path: "remote-only.txt",
+          mimeType: "text/plain",
+          md5Checksum: afterPullLocal.files["remote-only.txt"].md5,
+        },
+      ],
+      duplicateFolders: [],
+    };
+
+    await repo.saveSnapshot("pull", {
+      remote: remoteState,
+      pullChanges: [
+        {
+          suggestedAction: "download",
+          path: "remote-only.txt",
+          remoteMeta: remoteState.files[1],
+        },
+      ],
+    });
+
+    const snapshot = repo.getSnapshot();
+    assert.equal(snapshot.localFiles["local-only.txt"], undefined);
+    assert.equal(snapshot.localFiles["synced.txt"].md5, baseMd5);
+    assert.equal(
+      snapshot.localFiles["remote-only.txt"].md5,
+      afterPullLocal.files["remote-only.txt"].md5
+    );
+
+    const diff = computeDiff(snapshot, remoteState.files, await repo.scanLocal());
+    assert.deepEqual(
+      diff.changes.map((change) => ({ type: change.changeType, path: change.path })),
+      [
+        { type: ChangeType.LOCAL_ADDED, path: "local-only.txt" },
+        { type: ChangeType.LOCAL_MODIFIED, path: "synced.txt" },
+      ]
+    );
   } finally {
     cleanup(root);
   }

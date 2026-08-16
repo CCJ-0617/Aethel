@@ -61,6 +61,81 @@ import {
   renameLocalEntry,
 } from "./local-fs.js";
 
+function isPathOrDescendant(pathValue, parentPath) {
+  return pathValue === parentPath || pathValue.startsWith(`${parentPath}/`);
+}
+
+function isTrackedBySnapshot(pathValue, snapshotFiles) {
+  return Object.values(snapshotFiles || {}).some((entry) => {
+    const snapshotPath = entry.path || entry.localPath;
+    return snapshotPath && isPathOrDescendant(snapshotPath, pathValue);
+  });
+}
+
+function removePathAndDescendants(files, pathValue) {
+  for (const candidate of Object.keys(files)) {
+    if (isPathOrDescendant(candidate, pathValue)) {
+      delete files[candidate];
+    }
+  }
+}
+
+function addPulledRemotePaths(files, scannedLocalFiles, remoteFiles, pathValue) {
+  for (const remoteFile of remoteFiles) {
+    if (!remoteFile.path || !isPathOrDescendant(remoteFile.path, pathValue)) {
+      continue;
+    }
+    const localEntry = scannedLocalFiles[remoteFile.path];
+    if (localEntry) {
+      files[remoteFile.path] = localEntry;
+    }
+  }
+}
+
+/**
+ * Build the local half of a pull snapshot without accepting unrelated local
+ * edits as synced. A pull may change only selected remote paths; local-only
+ * additions and local modifications must retain their pre-pull baseline so a
+ * later push still detects them.
+ */
+function buildPulledLocalSnapshot(previousSnapshot, scannedLocal, remoteFiles, pullChanges) {
+  const scannedLocalFiles = scannedLocal?.files ?? scannedLocal ?? {};
+  const files = {};
+
+  // A previous buggy pull could already have captured local-only paths. Keep
+  // only entries that were backed by a Drive item in the prior snapshot.
+  for (const [pathValue, entry] of Object.entries(previousSnapshot?.localFiles || {})) {
+    if (isTrackedBySnapshot(pathValue, previousSnapshot?.files)) {
+      files[pathValue] = entry;
+    }
+  }
+
+  for (const change of pullChanges || []) {
+    const action = change.suggestedAction || change.action;
+    const pathValue = change.remoteMeta?.path || change.path;
+    if (!pathValue) continue;
+
+    if (action === "delete_local") {
+      removePathAndDescendants(files, pathValue);
+      continue;
+    }
+
+    if (action === "move_local") {
+      if (change.sourcePath) {
+        removePathAndDescendants(files, change.sourcePath);
+      }
+      addPulledRemotePaths(files, scannedLocalFiles, remoteFiles, pathValue);
+      continue;
+    }
+
+    if (action === "download") {
+      addPulledRemotePaths(files, scannedLocalFiles, remoteFiles, pathValue);
+    }
+  }
+
+  return files;
+}
+
 export class Repository {
   /**
    * @param {string|null} root  Workspace root (null for workspace-less commands like auth/clean)
@@ -241,7 +316,7 @@ export class Repository {
    * @param {object} [preloaded.remote]  Reuse this remote state (skip API call)
    * @param {object} [preloaded.local]   Reuse this local scan  (skip fs walk)
    */
-  async saveSnapshot(message = "sync", { remote, local } = {}) {
+  async saveSnapshot(message = "sync", { remote, local, pullChanges } = {}) {
     const config = this.getConfig();
     const rootFolderId = config.drive_folder_id || null;
 
@@ -261,7 +336,18 @@ export class Repository {
 
     assertNoDuplicateFolders(remoteState.duplicateFolders);
     writeRemoteCache(this._root, remoteState, rootFolderId);
-    const snapshot = buildSnapshot(remoteState.files, localFiles, message);
+    const snapshotLocalFiles = pullChanges
+      ? {
+          files: buildPulledLocalSnapshot(
+            readLatestSnapshot(this._root),
+            localFiles,
+            remoteState.files,
+            pullChanges
+          ),
+          packedDirs: localFiles?.packedDirs ?? {},
+        }
+      : localFiles;
+    const snapshot = buildSnapshot(remoteState.files, snapshotLocalFiles, message);
     writeSnapshot(this._root, snapshot);
     this.updateCurrentBranch(snapshot);
   }
